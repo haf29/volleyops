@@ -20,6 +20,7 @@ export default function Register() {
   const { setUserFromTokens } = useAuth()
 
   const [teams,        setTeams]        = useState([])
+  const [teamsError,   setTeamsError]   = useState('')
   const [role,         setRole]         = useState('player')
   const [newTeam,      setNewTeam]      = useState(false)   // "my team is not listed"
   const [form,         setForm]         = useState({
@@ -30,11 +31,17 @@ export default function Register() {
   const [error,   setError]   = useState('')
   const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
+  function loadTeams() {
+    setTeamsError('')
     api.get('/teams/public')
       .then(({ data }) => setTeams(data.teams || []))
-      .catch(() => {})
-  }, [])
+      .catch((err) => {
+        console.error('Failed to load teams:', err)
+        setTeamsError('Could not load teams. Check your connection and try again.')
+      })
+  }
+
+  useEffect(() => { loadTeams() }, [])
 
   function set(field) { return (e) => setForm(f => ({ ...f, [field]: e.target.value })) }
 
@@ -175,9 +182,18 @@ export default function Register() {
             {!newTeam && (
               <div className="form-row">
                 <label>{isStaff ? 'Team to Coach *' : 'Team *'}</label>
+                {teamsError ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                    <span style={{ fontSize: 12, color: 'var(--pink)' }}>{teamsError}</span>
+                    <button type="button" onClick={loadTeams}
+                      style={{ fontSize: 12, color: 'var(--purple-light)', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>
+                      Retry
+                    </button>
+                  </div>
+                ) : null}
                 <select className="select" value={form.team_id} onChange={set('team_id')}
                   required={!newTeam && (role === 'player' || isStaff)}>
-                  <option value="">Select a team…</option>
+                  <option value="">{teams.length === 0 && !teamsError ? 'Loading teams…' : 'Select a team…'}</option>
                   {teams.map(t => (
                     <option key={t.id} value={t.id}>
                       {t.name}{t.division ? ` — ${t.division}` : ''}{t.season ? ` (${t.season})` : ''}
