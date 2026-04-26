@@ -1,8 +1,16 @@
 import axios from 'axios'
 
-const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api',
-})
+// Detect backend URL at runtime so Railway cache never causes issues.
+// On any *.railway.app domain → use the known backend URL.
+// Locally → use the Vite proxy (/api).
+function getBaseURL() {
+  if (typeof window !== 'undefined' && window.location.hostname.endsWith('.railway.app')) {
+    return 'https://volleyops-production.up.railway.app/api'
+  }
+  return import.meta.env.VITE_API_URL || '/api'
+}
+
+const api = axios.create({ baseURL: getBaseURL() })
 
 // Attach access token to every request
 api.interceptors.request.use((config) => {
