@@ -12,11 +12,18 @@ const app    = express();
 const server = http.createServer(app);
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
-const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000').split(',');
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:5173').split(',');
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;                                      // same-origin / server-to-server
+  if (allowedOrigins.includes(origin)) return true;             // explicit whitelist
+  if (/^https:\/\/[a-z0-9-]+\.up\.railway\.app$/.test(origin)) return true; // any Railway subdomain
+  return false;
+}
 
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    if (isAllowedOrigin(origin)) return cb(null, true);
     cb(new Error('Not allowed by CORS'));
   },
   credentials: true,
@@ -25,7 +32,10 @@ app.use(cors({
 // ─── SOCKET.IO ────────────────────────────────────────────────────────────────
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: (origin, cb) => {
+      if (isAllowedOrigin(origin)) return cb(null, true);
+      cb(new Error('Not allowed by CORS'));
+    },
     methods: ['GET', 'POST'],
     credentials: true,
   },
