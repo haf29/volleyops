@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import api from '../api/client'
+import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 
 const SKILLS = [
@@ -136,6 +137,8 @@ function EvalModal({ player, tryoutId, existingEval, onClose, onSaved }) {
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function Evaluations() {
+  const { isAdmin, isCoach } = useAuth()
+  const canEvaluate = isAdmin || isCoach
   const toast = useToast()
   const [tryouts,  setTryouts]  = useState([])
   const [players,  setPlayers]  = useState([]) // summary rows
@@ -238,7 +241,7 @@ export default function Evaluations() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
-                  {['Player','Pos','Srv','Pass','Set','Hit','Blk','Def','Ath','Coach','Overall','#Evals','Action'].map(h => (
+                  {['Player','Pos','Srv','Pass','Set','Hit','Blk','Def','Ath','Coach','Overall','#Evals',...(canEvaluate ? ['Action'] : [])].map(h => (
                     <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.06em', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -257,12 +260,14 @@ export default function Evaluations() {
                       <span style={{ fontWeight: 800, fontSize: 15, color: 'var(--purple-light)' }}>{p.overall ?? '—'}</span>
                     </td>
                     <td style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-muted)' }}>{p.eval_count}</td>
-                    <td style={{ padding: '10px 12px' }}>
-                      <button className="btn btn-secondary btn-sm"
-                        onClick={() => setEvalTarget({ player: { id: p.player_id, name: p.player_name, position: p.position }, existingEval: existingEvalForPlayer(p.player_id) })}>
-                        Edit
-                      </button>
-                    </td>
+                    {canEvaluate && (
+                      <td style={{ padding: '10px 12px' }}>
+                        <button className="btn btn-secondary btn-sm"
+                          onClick={() => setEvalTarget({ player: { id: p.player_id, name: p.player_name, position: p.position }, existingEval: existingEvalForPlayer(p.player_id) })}>
+                          Edit
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -274,11 +279,13 @@ export default function Evaluations() {
 
         /* ── Detail table (every individual score) ── */
         <div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-            <button className="btn btn-primary btn-sm" onClick={() => setEvalTarget({ player: null, existingEval: null })}>
-              + Add Evaluation
-            </button>
-          </div>
+          {canEvaluate && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+              <button className="btn btn-primary btn-sm" onClick={() => setEvalTarget({ player: null, existingEval: null })}>
+                + Add Evaluation
+              </button>
+            </div>
+          )}
           {evals.length === 0 ? (
             <div className="empty-state"><div className="empty-icon">📝</div><p>No evaluations yet.</p></div>
           ) : (
@@ -306,12 +313,14 @@ export default function Evaluations() {
                     ))}
                   </div>
                   {e.notes && <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>{e.notes}</div>}
-                  <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
-                    <button className="btn btn-secondary btn-sm"
-                      onClick={() => setEvalTarget({ player: { id: e.player_id, name: e.player_name, position: e.position }, existingEval: e })}>
-                      Edit
-                    </button>
-                  </div>
+                  {canEvaluate && (
+                    <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                      <button className="btn btn-secondary btn-sm"
+                        onClick={() => setEvalTarget({ player: { id: e.player_id, name: e.player_name, position: e.position }, existingEval: e })}>
+                        Edit
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

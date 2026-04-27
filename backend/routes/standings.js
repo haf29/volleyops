@@ -64,29 +64,50 @@ function upsertStandingRecord(req, res, teamId) {
       updated_at = datetime('now')
   `).run(teamId, season, played, wins, losses, sets_won, sets_lost, points);
 
-  return res.status(201).json(
-    db.prepare(`SELECT * FROM standings WHERE team_id = ? AND season = ?`).get(teamId, season),
-  );
+  const saved = db.prepare(`SELECT * FROM standings WHERE team_id = ? AND season = ?`).get(teamId, season);
+
+  // Broadcast so all connected clients refresh standings in real-time
+  const io = req.app.get('io');
+  if (io) io.emit('standings_updated', { team_id: teamId, season });
+
+  return res.status(201).json(saved);
 }
 
 router.get('/', (req, res) => {
-  const { season, division, team_id } = req.query;
+  const { season: seasonParam, division, team_id } = req.query;
+
+  // Derive effective season: explicit param → latest in DB → current academic year
+  let season = seasonParam;
+  if (!season) {
+    const latest = db.prepare(`SELECT season FROM standings ORDER BY season DESC LIMIT 1`).get();
+    const yr = new Date().getFullYear();
+    season = latest?.season || `${yr}-${yr + 1}`;
+  }
+
+  // All seasons that have any data (for filter buttons in UI)
+  const allSeasons = db.prepare(`SELECT DISTINCT season FROM standings ORDER BY season DESC`)
+    .all().map((r) => r.season);
+  if (!allSeasons.includes(season)) allSeasons.unshift(season);
 
   let sql = `
     SELECT
-      s.*,
+      t.id   AS team_id,
       t.name AS team_name,
-      t.division
-    FROM standings s
-    JOIN teams t ON t.id = s.team_id
+      t.division,
+      s.id,
+      ?      AS season,
+      COALESCE(s.played,    0) AS played,
+      COALESCE(s.wins,      0) AS wins,
+      COALESCE(s.losses,    0) AS losses,
+      COALESCE(s.sets_won,  0) AS sets_won,
+      COALESCE(s.sets_lost, 0) AS sets_lost,
+      COALESCE(s.points,    0) AS points,
+      s.updated_at
+    FROM teams t
+    LEFT JOIN standings s ON s.team_id = t.id AND s.season = ?
     WHERE 1 = 1
   `;
-  const params = [];
-
-  if (season) {
-    sql += ` AND s.season = ?`;
-    params.push(season);
-  }
+  const params = [season, season];
 
   if (division) {
     sql += ` AND t.division = ?`;
@@ -94,14 +115,14 @@ router.get('/', (req, res) => {
   }
 
   if (team_id) {
-    sql += ` AND s.team_id = ?`;
+    sql += ` AND t.id = ?`;
     params.push(Number(team_id));
   }
 
-  sql += ` ORDER BY s.points DESC, s.wins DESC, s.updated_at DESC`;
+  sql += ` ORDER BY COALESCE(s.points, 0) DESC, COALESCE(s.wins, 0) DESC, s.updated_at DESC, t.name ASC`;
 
   const standings = computeRankedStandings(db.prepare(sql).all(...params));
-  res.json({ standings });
+  res.json({ standings, seasons: allSeasons });
 });
 
 router.post('/', authenticate, requireRole('admin'), [

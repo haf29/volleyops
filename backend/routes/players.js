@@ -147,9 +147,29 @@ router.get('/', authenticate, requireRole('admin', 'coach', 'assistant_coach'), 
 
 // ─── GET /api/players/stats ───────────────────────────────────────────────────
 // Returns players with their season stats for the coach's teams.
-// Query params: team_id (optional), season (optional, default '2024-2025')
+// Query params: team_id (optional), season (optional — auto-detected from team or latest data)
 router.get('/stats', authenticate, requireRole('admin', 'coach', 'assistant_coach'), (req, res) => {
-  const { team_id, season = '2024-2025' } = req.query;
+  const { team_id, season: seasonParam } = req.query;
+
+  // Auto-detect season: explicit param → team's season field → latest in player_stats → fallback
+  let season = seasonParam;
+  if (!season) {
+    let teamSeasonRow = null;
+    if (team_id) {
+      teamSeasonRow = db.prepare(`SELECT season FROM teams WHERE id = ? AND season IS NOT NULL`).get(Number(team_id));
+    } else if (req.user.role === 'coach') {
+      teamSeasonRow = db.prepare(`SELECT season FROM teams WHERE coach_id = ? AND season IS NOT NULL LIMIT 1`).get(req.user.id);
+    } else if (req.user.role === 'assistant_coach') {
+      teamSeasonRow = db.prepare(`SELECT season FROM teams WHERE assistant_coach_id = ? AND season IS NOT NULL LIMIT 1`).get(req.user.id);
+    }
+    if (teamSeasonRow?.season) {
+      season = teamSeasonRow.season;
+    } else {
+      const latest = db.prepare(`SELECT season FROM player_stats ORDER BY season DESC LIMIT 1`).get();
+      const yr = new Date().getFullYear();
+      season = latest?.season || `${yr - 1}-${yr}`;
+    }
+  }
 
   let teamFilter = '';
   const params = [season];
@@ -207,7 +227,7 @@ router.get('/stats', authenticate, requireRole('admin', 'coach', 'assistant_coac
 
   const standings = db.prepare(standingsSql).all(...standingsParams);
 
-  res.json({ players: rows, standings });
+  res.json({ players: rows, standings, season });
 });
 
 // ─── GET /api/players/:id ─────────────────────────────────────────────────────

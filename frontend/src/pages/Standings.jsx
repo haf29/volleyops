@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
+import { useSocket } from '../context/SocketContext'
 
 function StatBar({ value, max, color }) {
   const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0
@@ -70,6 +71,7 @@ const MEDALS = { 1: '🥇', 2: '🥈', 3: '🥉' }
 export default function Standings() {
   const { isAdmin } = useAuth()
   const toast = useToast()
+  const { socket } = useSocket()
   const [standings, setStandings] = useState([])
   const [allTeams,  setAllTeams]  = useState([])
   const [seasons,   setSeasons]   = useState([])
@@ -82,6 +84,13 @@ export default function Standings() {
     api.get('/teams').then(({ data }) => setAllTeams(data.teams || [])).catch(() => {})
   }, [])
 
+  // Auto-refresh when admin updates standings from any device
+  useEffect(() => {
+    if (!socket) return
+    socket.on('standings_updated', () => loadStandings())
+    return () => socket.off('standings_updated')
+  }, [socket, season, division])
+
   async function loadStandings() {
     setLoading(true)
     try {
@@ -91,8 +100,8 @@ export default function Standings() {
       const { data } = await api.get('/standings', { params })
       const rows = data.standings || []
       setStandings(rows)
-      // derive unique seasons
-      const s = [...new Set(rows.map(r => r.season).filter(Boolean))].sort().reverse()
+      // use backend-supplied seasons list (includes seasons with no entries for current team set)
+      const s = data.seasons?.length ? data.seasons : [...new Set(rows.map(r => r.season).filter(Boolean))].sort().reverse()
       if (s.length && !season) { setSeasons(s); setSeason(s[0]) }
       else setSeasons(s)
     } catch { toast('Failed to load standings', 'error') }
@@ -155,7 +164,7 @@ export default function Standings() {
               </thead>
               <tbody>
                 {standings.map((s) => (
-                  <tr key={s.id} style={{ background: s.rank <= 3 ? `rgba(124,58,237,${0.04 * (4 - s.rank)})` : '' }}>
+                  <tr key={s.team_id} style={{ background: s.rank <= 3 ? `rgba(124,58,237,${0.04 * (4 - s.rank)})` : '' }}>
                     <td style={{ textAlign: 'center' }}>
                       <span style={{ fontSize: s.rank <= 3 ? 20 : 13, fontWeight: 700, color: s.rank <= 3 ? '' : 'var(--text-muted)' }}>
                         {MEDALS[s.rank] || s.rank}

@@ -80,7 +80,8 @@ router.get('/', authenticate, requireRole('admin', 'coach', 'assistant_coach', '
     params.push(currentPlayer.id);
   } else if (req.user.role !== 'admin') {
     if (!teamIds.length) return res.json({ tryouts: [] });
-    sql += ` AND (t.team_id IN (${teamIds.map(() => '?').join(',')}) OR t.team_id IS NULL)`;
+    // Coaches/assistants only see tryouts for their own teams — no cross-team leakage
+    sql += ` AND t.team_id IN (${teamIds.map(() => '?').join(',')})`;
     params.push(...teamIds);
   }
   if (season)  { sql += ` AND t.season = ?`;  params.push(season); }

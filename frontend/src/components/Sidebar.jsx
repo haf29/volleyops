@@ -15,14 +15,14 @@ const NAV = [
     { to: '/payments', icon: '💳', label: 'Payments',       roles: ['admin','coach','assistant_coach','player'] },
   ]},
   { section: 'Tools', items: [
-    { to: '/tactics',  icon: '🎯', label: 'Tactics Board' },
+    { to: '/tactics',  icon: '🎯', label: 'Tactics Board', roles: ['coach','assistant_coach'] },
     { to: '/messages', icon: '💬', label: 'Communication' },
   ]},
   { section: 'Tryouts & Scouting', items: [
-    { to: '/tryouts',      icon: '✅', label: 'Check-In', playerLabel: 'Tryouts', roles: ['admin','coach','assistant_coach','player'] },
-    { to: '/evaluations',  icon: '📊', label: 'Evaluations',   roles: ['admin','coach','assistant_coach'] },
-    { to: '/ai-placement', icon: '🤖', label: 'AI Positions',  roles: ['admin','coach'] },
-    { to: '/attendance',   icon: '📅', label: 'Attendance',    roles: ['admin','coach','assistant_coach'] },
+    { to: '/tryouts',      icon: '✅', label: 'Check-In', playerLabel: 'Tryouts', roles: ['coach','assistant_coach','player'] },
+    { to: '/evaluations',  icon: '📊', label: 'Evaluations',   roles: ['coach','assistant_coach'] },
+    { to: '/ai-placement', icon: '🤖', label: 'AI Positions',  roles: ['coach'] },
+    { to: '/attendance',   icon: '📅', label: 'Attendance',    roles: ['coach','assistant_coach'] },
   ]},
   { section: 'Account', items: [
     { to: '/profile',  icon: '⚙️', label: 'My Profile' },

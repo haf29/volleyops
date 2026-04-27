@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { Navigate } from 'react-router-dom'
 import api from '../api/client'
+import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 
 // ─── Mock AI engine ────────────────────────────────────────────────────────────
@@ -191,7 +193,10 @@ const FORMATIONS = {
 // ─── Component ─────────────────────────────────────────────────────────────────
 
 export default function TacticsBoard() {
+  const { isPlayer } = useAuth()
   const toast = useToast()
+
+  if (isPlayer) return <Navigate to="/dashboard" replace />
 
   const canvasRef = useRef(null)
   const areaRef   = useRef(null)

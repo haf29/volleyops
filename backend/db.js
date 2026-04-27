@@ -12,6 +12,9 @@ const db = new Database(dbPath);
 
 // Performance + integrity
 db.pragma('journal_mode = WAL');
+// Merge any pending WAL data into the main .db file on every startup.
+// This keeps the .db file self-contained when zipping/moving to another device.
+db.pragma('wal_checkpoint(TRUNCATE)');
 db.pragma('foreign_keys = ON');
 
 db.exec(`

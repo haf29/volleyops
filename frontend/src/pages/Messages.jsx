@@ -23,21 +23,39 @@ function timeAgo(iso) {
 }
 
 export default function Messages() {
-  const { user } = useAuth()
+  const { user, isAdmin } = useAuth()
   const { socket } = useSocket()
   const toast = useToast()
 
   const [convos,   setConvos]   = useState([])
-  const [active,   setActive]   = useState(null)   // {id, name, type, members}
+  const [active,   setActive]   = useState(null)
   const [messages, setMessages] = useState([])
   const [text,     setText]     = useState('')
   const [sending,  setSending]  = useState(false)
   const [typing,   setTyping]   = useState(null)
   const [tab,      setTab]      = useState('All')
   const [search,   setSearch]   = useState('')
+
+  // "New Direct Message" panel
+  const [showNewMsg,    setShowNewMsg]    = useState(false)
+  const [userSearch,    setUserSearch]    = useState('')
+  const [userResults,   setUserResults]   = useState([])
+  const [userSearching, setUserSearching] = useState(false)
+
+  // "New Group" panel
+  const [showNewGroup,    setShowNewGroup]    = useState(false)
+  const [groupName,       setGroupName]       = useState('')
+  const [groupSearch,     setGroupSearch]     = useState('')
+  const [groupResults,    setGroupResults]    = useState([])
+  const [groupSearching,  setGroupSearching]  = useState(false)
+  const [selectedMembers, setSelectedMembers] = useState([])
+  const [creatingGroup,   setCreatingGroup]   = useState(false)
+
   const messagesEndRef = useRef(null)
   const typingTimer    = useRef(null)
   const prevConvoId    = useRef(null)
+  const searchTimer    = useRef(null)
+  const groupTimer     = useRef(null)
 
   // Load conversations
   const loadConvos = useCallback(() => {
@@ -48,11 +66,104 @@ export default function Messages() {
 
   useEffect(() => { loadConvos() }, [loadConvos])
 
+  // Live user search — scoped by role on the backend
+  function handleUserSearch(e) {
+    const q = e.target.value
+    setUserSearch(q)
+    clearTimeout(searchTimer.current)
+    if (!q.trim()) { setUserResults([]); return }
+    searchTimer.current = setTimeout(async () => {
+      setUserSearching(true)
+      try {
+        const { data } = await api.get(`/messages/users/search?mode=direct&q=${encodeURIComponent(q.trim())}`)
+        setUserResults(data.users || [])
+      } catch { setUserResults([]) }
+      finally { setUserSearching(false) }
+    }, 200)
+  }
+
+  async function startDirectConvo(targetUser) {
+    try {
+      const { data } = await api.post('/messages/conversations', { type: 'direct', memberIds: [targetUser.id] })
+      setShowNewMsg(false)
+      setUserSearch('')
+      setUserResults([])
+      loadConvos()
+      openConvo({ ...data.conversation, display_name: targetUser.name })
+    } catch { toast('Failed to open conversation', 'error') }
+  }
+
+  function handleGroupSearch(e) {
+    const q = e.target.value
+    setGroupSearch(q)
+    clearTimeout(groupTimer.current)
+    groupTimer.current = setTimeout(async () => {
+      setGroupSearching(true)
+      try {
+        const { data } = await api.get(`/messages/users/search?mode=group&q=${encodeURIComponent(q.trim())}`)
+        const alreadyIds = new Set(selectedMembers.map(m => m.id))
+        setGroupResults((data.users || []).filter(u => !alreadyIds.has(u.id)))
+      } catch { setGroupResults([]) }
+      finally { setGroupSearching(false) }
+    }, 200)
+  }
+
+  function toggleMember(u) {
+    setSelectedMembers(prev => {
+      const exists = prev.find(m => m.id === u.id)
+      if (exists) return prev.filter(m => m.id !== u.id)
+      return [...prev, u]
+    })
+    setGroupResults(prev => prev.filter(r => r.id !== u.id))
+  }
+
+  function removeMember(u) {
+    setSelectedMembers(prev => prev.filter(m => m.id !== u.id))
+  }
+
+  async function createGroup() {
+    if (!groupName.trim()) { toast('Enter a group name', 'error'); return }
+    if (selectedMembers.length < 1) { toast('Add at least one member', 'error'); return }
+    setCreatingGroup(true)
+    try {
+      const { data } = await api.post('/messages/conversations', {
+        type: 'group',
+        name: groupName.trim(),
+        memberIds: selectedMembers.map(m => m.id),
+      })
+      setShowNewGroup(false)
+      setGroupName('')
+      setSelectedMembers([])
+      setGroupSearch('')
+      setGroupResults([])
+      loadConvos()
+      openConvo({ ...data.conversation, display_name: data.conversation.name })
+    } catch { toast('Failed to create group', 'error') }
+    finally { setCreatingGroup(false) }
+  }
+
+  function openNewMsgPanel() {
+    setShowNewMsg(v => !v)
+    setShowNewGroup(false)
+    setUserSearch('')
+    setUserResults([])
+  }
+
+  function openNewGroupPanel() {
+    setShowNewGroup(v => !v)
+    setShowNewMsg(false)
+    setGroupName('')
+    setGroupSearch('')
+    setGroupResults([])
+    setSelectedMembers([])
+  }
+
   // Socket events
   useEffect(() => {
     if (!socket) return
     const onMsg = (msg) => {
-      if (msg.conversation_id === active?.id) {
+      if (msg.conversation_id === active?.id && msg.sender_id !== user?.id) {
+        // Only append messages from others — own messages are already added by send()
         setMessages((prev) => [...prev, msg])
       }
       loadConvos()
@@ -127,10 +238,110 @@ export default function Messages() {
       {/* ── Conversations panel ── */}
       <div style={{ width: 300, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', background: 'var(--surface)', flexShrink: 0 }}>
         <div style={{ padding: '18px 16px 12px', borderBottom: '1px solid var(--border)' }}>
-          <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 10 }}>Messages</div>
+          {/* Header row */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <div style={{ fontWeight: 700, fontSize: 17 }}>Messages</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={openNewMsgPanel}
+                title="New direct message"
+                style={{ fontSize: 11, fontWeight: 700, padding: '4px 9px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${showNewMsg ? 'var(--purple)' : 'var(--border)'}`, background: showNewMsg ? 'rgba(124,58,237,.2)' : 'transparent', color: showNewMsg ? 'var(--purple-light)' : 'var(--text-muted)', fontFamily: 'DM Sans, sans-serif' }}>
+                ✉
+              </button>
+              <button onClick={openNewGroupPanel}
+                title="New group"
+                style={{ fontSize: 11, fontWeight: 700, padding: '4px 9px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${showNewGroup ? 'var(--purple)' : 'var(--border)'}`, background: showNewGroup ? 'rgba(124,58,237,.2)' : 'transparent', color: showNewGroup ? 'var(--purple-light)' : 'var(--text-muted)', fontFamily: 'DM Sans, sans-serif' }}>
+                👥
+              </button>
+            </div>
+          </div>
+
+          {/* Panel: new direct message */}
+          {showNewMsg && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ position: 'relative', marginBottom: 6 }}>
+                <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 12 }}>🔍</span>
+                <input autoFocus
+                  style={{ width: '100%', background: 'var(--surface2)', border: '1.5px solid var(--purple)', borderRadius: 8, padding: '7px 12px 7px 30px', fontSize: 13, color: 'var(--text)', outline: 'none', fontFamily: 'DM Sans, sans-serif', boxSizing: 'border-box' }}
+                  placeholder="Search by name or email…"
+                  value={userSearch} onChange={handleUserSearch} />
+              </div>
+              <div style={{ background: 'var(--surface2)', borderRadius: 8, border: '1px solid var(--border)', maxHeight: 200, overflowY: 'auto' }}>
+                {userSearching && <div style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-muted)' }}>Searching…</div>}
+                {!userSearching && userSearch && userResults.length === 0 && <div style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-muted)' }}>No users found</div>}
+                {!userSearch && <div style={{ padding: '10px 14px', fontSize: 12, color: 'var(--text-dim)' }}>Type to find someone to message…</div>}
+                {userResults.map(u => (
+                  <div key={u.id} onClick={() => startDirectConvo(u)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)' }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(124,58,237,.1)'}
+                    onMouseLeave={e => e.currentTarget.style.background = ''}>
+                    <Avatar name={u.name} size={30} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{u.role?.replace(/_/g, ' ')} · {u.email}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Panel: new group */}
+          {showNewGroup && (
+            <div style={{ marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <input
+                style={{ width: '100%', background: 'var(--surface2)', border: '1.5px solid var(--purple)', borderRadius: 8, padding: '7px 12px', fontSize: 13, color: 'var(--text)', outline: 'none', fontFamily: 'DM Sans, sans-serif', boxSizing: 'border-box' }}
+                placeholder="Group name…"
+                value={groupName} onChange={e => setGroupName(e.target.value)} />
+
+              {/* Selected members chips */}
+              {selectedMembers.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {selectedMembers.map(m => (
+                    <span key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 20, background: 'rgba(124,58,237,.2)', color: 'var(--purple-light)', border: '1px solid rgba(124,58,237,.3)' }}>
+                      {m.name}
+                      <span onClick={() => removeMember(m)} style={{ cursor: 'pointer', marginLeft: 2, opacity: .7 }}>✕</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Member search */}
+              <div style={{ position: 'relative' }}>
+                <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 12 }}>🔍</span>
+                <input
+                  style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '7px 12px 7px 30px', fontSize: 13, color: 'var(--text)', outline: 'none', fontFamily: 'DM Sans, sans-serif', boxSizing: 'border-box' }}
+                  placeholder="Add members…"
+                  value={groupSearch} onChange={handleGroupSearch} />
+              </div>
+              <div style={{ background: 'var(--surface2)', borderRadius: 8, border: '1px solid var(--border)', maxHeight: 160, overflowY: 'auto' }}>
+                {groupSearching && <div style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text-muted)' }}>Searching…</div>}
+                {!groupSearching && groupSearch && groupResults.length === 0 && <div style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text-muted)' }}>No users found</div>}
+                {!groupSearch && !groupSearching && <div style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text-dim)' }}>Type to find members to add…</div>}
+                {groupResults.map(u => (
+                  <div key={u.id} onClick={() => toggleMember(u)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)' }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(124,58,237,.1)'}
+                    onMouseLeave={e => e.currentTarget.style.background = ''}>
+                    <Avatar name={u.name} size={26} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>{u.name}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{u.role?.replace(/_/g, ' ')}</div>
+                    </div>
+                    <span style={{ fontSize: 18, color: 'var(--purple-light)' }}>+</span>
+                  </div>
+                ))}
+              </div>
+              <button onClick={createGroup} disabled={creatingGroup || !groupName.trim() || selectedMembers.length < 1}
+                style={{ padding: '8px 0', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'DM Sans, sans-serif', background: 'var(--grad1)', color: '#fff', opacity: (!groupName.trim() || selectedMembers.length < 1) ? .5 : 1 }}>
+                {creatingGroup ? 'Creating…' : `Create Group${selectedMembers.length ? ` (${selectedMembers.length + 1})` : ''}`}
+              </button>
+            </div>
+          )}
+
+          {/* Conversation search */}
           <div style={{ position: 'relative' }}>
             <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 12 }}>🔍</span>
-            <input style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '7px 12px 7px 30px', fontSize: 13, color: 'var(--text)', outline: 'none', fontFamily: 'DM Sans, sans-serif' }}
+            <input style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '7px 12px 7px 30px', fontSize: 13, color: 'var(--text)', outline: 'none', fontFamily: 'DM Sans, sans-serif', boxSizing: 'border-box' }}
               placeholder="Search conversations…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
         </div>
@@ -180,7 +391,7 @@ export default function Messages() {
             <div>
               <div style={{ fontWeight: 700, fontSize: 15 }}>{active.display_name || active.name || 'Conversation'}</div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                {active.type === 'team' ? 'Team channel' : active.type === 'broadcast' ? 'Broadcast' : 'Direct message'}
+                {active.type === 'team' ? 'Team channel' : active.type === 'group' ? 'Group chat' : active.type === 'broadcast' ? 'Broadcast' : 'Direct message'}
               </div>
             </div>
           </div>

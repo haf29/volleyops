@@ -16,9 +16,10 @@ const POS_LABELS   = {
 }
 
 // ── Create Tryout Modal ───────────────────────────────────────────────────────
-function CreateModal({ teams, onClose, onCreated }) {
+function CreateModal({ teams, isAdmin, onClose, onCreated }) {
   const toast = useToast()
-  const [form, setForm] = useState({ name: '', date: '', team_id: '', location: '', season: '', notes: '' })
+  // Non-admins must link tryout to one of their teams; pre-select the first one
+  const [form, setForm] = useState({ name: '', date: '', team_id: isAdmin ? '' : (teams[0]?.id ?? ''), location: '', season: '', notes: '' })
   const [loading, setLoading] = useState(false)
 
   async function submit(e) {
@@ -62,9 +63,9 @@ function CreateModal({ teams, onClose, onCreated }) {
             <div className="form-row"><label>Season</label>
               <input className="input" placeholder="2024-2025" {...f('season')} />
             </div>
-            <div className="form-row"><label>Team (optional)</label>
-              <select className="input" {...f('team_id')}>
-                <option value="">— Any team —</option>
+            <div className="form-row"><label>Team {isAdmin ? '(optional)' : '*'}</label>
+              <select className="input" required={!isAdmin} {...f('team_id')}>
+                {isAdmin && <option value="">— Any team —</option>}
                 {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
             </div>
@@ -93,13 +94,16 @@ function CheckInPanel({ tryout, onClose, onUpdated }) {
   const [search,  setSearch]  = useState('')
 
   const reload = useCallback(async () => {
-    const [detail, allPlayers] = await Promise.all([
+    const [detail, poolRes] = await Promise.all([
       api.get(`/tryouts/${tryout.id}`),
-      api.get('/players', { params: { status: 'approved', limit: 500 } }),
+      // Scope the player pool to the tryout's team so coaches only see their own players
+      tryout.team_id
+        ? api.get(`/teams/${tryout.team_id}`)
+        : api.get('/players', { params: { status: 'approved', limit: 500 } }),
     ])
     setData(detail.data)
-    setPlayers(allPlayers.data.players || [])
-  }, [tryout.id])
+    setPlayers(tryout.team_id ? (poolRes.data.roster || []) : (poolRes.data.players || []))
+  }, [tryout.id, tryout.team_id])
 
   useEffect(() => { reload() }, [reload])
 
@@ -369,7 +373,7 @@ export default function Tryouts() {
       )}
 
       {showCreate && (
-        <CreateModal teams={teams} onClose={() => setShowCreate(false)} onCreated={load} />
+        <CreateModal teams={teams} isAdmin={isAdmin} onClose={() => setShowCreate(false)} onCreated={load} />
       )}
       {checkinTarget && (
         <CheckInPanel tryout={checkinTarget} onClose={() => setCheckinTarget(null)} onUpdated={load} />

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
+import { useSocket } from '../context/SocketContext'
 
 const POS_LABELS = {
   setter: 'Setter', libero: 'Libero', outside_hitter: 'Outside Hitter',
@@ -419,7 +420,7 @@ function PlayerDashboard({ user }) {
 }
 
 // ─── Team Stats Panel (coaches only) ─────────────────────────────────────────
-function TeamStatsPanel({ players, standings, tab, onTab }) {
+function TeamStatsPanel({ players, standings, season, tab, onTab }) {
   const BAR_COLOR = { scorers: '#7c3aed', servers: '#06b6d4', blockers: '#f59e0b', diggers: '#10b981' }
   const tabs = [
     { id: 'scorers',  label: '🏐 Top Scorers',  key: 'points', perMatch: 'points_per_match', unit: 'pts' },
@@ -439,7 +440,7 @@ function TeamStatsPanel({ players, standings, tab, onTab }) {
       <div className="card-header" style={{ marginBottom: 14 }}>
         <div>
           <div className="card-title">Player Statistics</div>
-          <div className="card-sub">2024-2025 season leaderboard</div>
+          <div className="card-sub">{season || '—'} season leaderboard</div>
         </div>
         {standings.length > 0 && (
           <div style={{ display: 'flex', gap: 8 }}>
@@ -534,6 +535,8 @@ function TeamStatsPanel({ players, standings, tab, onTab }) {
   )
 }
 
+const MEDALS = { 1: '🥇', 2: '🥈', 3: '🥉' }
+
 // ─── Staff dashboard ──────────────────────────────────────────────────────────
 function StaffDashboard({ user, isAdmin, isCoach }) {
   const [stats,         setStats]         = useState(null)
@@ -548,10 +551,31 @@ function StaffDashboard({ user, isAdmin, isCoach }) {
   const [activating,    setActivating]    = useState(null)
   const [playerStats,  setPlayerStats]  = useState([])
   const [teamStandings, setTeamStandings] = useState([])
+  const [playerSeason,  setPlayerSeason]  = useState('')
   const [statsTab,     setStatsTab]     = useState('scorers')
   const [smtpOk,       setSmtpOk]       = useState(true)
   const [smtpDismissed, setSmtpDismissed] = useState(false)
+  const [liveStandings, setLiveStandings] = useState([])
   const toast = useToast()
+  const { socket } = useSocket()
+
+  const loadLiveStandings = () => {
+    api.get('/standings').then(({ data }) => {
+      const all = data.standings || []
+      // Show only the most recent season to avoid showing multiple entries per team
+      const latestSeason = all.map(s => s.season).filter(Boolean).sort().reverse()[0]
+      setLiveStandings(latestSeason ? all.filter(s => s.season === latestSeason) : all)
+    }).catch(() => {})
+  }
+
+  // Real-time: refresh standings when admin saves an update
+  useEffect(() => {
+    if (!isAdmin) return
+    loadLiveStandings()
+    if (!socket) return
+    socket.on('standings_updated', loadLiveStandings)
+    return () => socket.off('standings_updated', loadLiveStandings)
+  }, [isAdmin, socket])
 
   async function activateStaff(staffUser) {
     setActivating(staffUser.id)
@@ -600,6 +624,7 @@ function StaffDashboard({ user, isAdmin, isCoach }) {
         api.get('/players/stats').then(({ data }) => {
           setPlayerStats(data.players || [])
           setTeamStandings(data.standings || [])
+          if (data.season) setPlayerSeason(data.season)
         }).catch(() => {})
       )
     }
@@ -798,14 +823,34 @@ function StaffDashboard({ user, isAdmin, isCoach }) {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {teams.map(t => (
-                <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                  <div>
+                <div key={t.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{t.name}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t.division} · {t.player_count} players</div>
+                    <span className={`badge ${t.roster_published ? 'badge-green' : t.is_finalized ? 'badge-cyan' : 'badge-dim'}`}>
+                      {t.roster_published ? 'Published' : t.is_finalized ? 'Finalized' : 'Draft'}
+                    </span>
                   </div>
-                  <span className={`badge ${t.roster_published ? 'badge-green' : t.is_finalized ? 'badge-cyan' : 'badge-dim'}`}>
-                    {t.roster_published ? 'Published' : t.is_finalized ? 'Finalized' : 'Draft'}
-                  </span>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: t.coach_name ? 6 : 0 }}>
+                    {t.division} · {t.player_count} players
+                  </div>
+                  {(t.coach_name || t.assistant_coach_name) && (
+                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                      {t.coach_name && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{ fontSize: 11 }}>🎽</span>
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>Coach:</span>
+                          <span style={{ fontSize: 11, color: 'var(--text)', fontWeight: 700 }}>{t.coach_name}</span>
+                        </div>
+                      )}
+                      {t.assistant_coach_name && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{ fontSize: 11 }}>👟</span>
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>Asst:</span>
+                          <span style={{ fontSize: 11, color: 'var(--text)', fontWeight: 700 }}>{t.assistant_coach_name}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -818,9 +863,73 @@ function StaffDashboard({ user, isAdmin, isCoach }) {
         <TeamStatsPanel
           players={playerStats}
           standings={teamStandings}
+          season={playerSeason}
           tab={statsTab}
           onTab={setStatsTab}
         />
+      )}
+
+      {/* ── Live Standings (admin) ── */}
+      {isAdmin && liveStandings.length > 0 && (
+        <div className="card" style={{ marginTop: 20 }}>
+          <div className="card-header">
+            <div>
+              <div className="card-title">League Standings</div>
+              <div className="card-sub">Updates instantly when standings change</div>
+            </div>
+            <Link to="/standings" className="btn btn-secondary btn-sm" style={{ textDecoration: 'none' }}>Full view</Link>
+          </div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 40 }}>Rank</th>
+                  <th>Team</th>
+                  <th style={{ textAlign: 'center' }}>P</th>
+                  <th style={{ textAlign: 'center' }}>W</th>
+                  <th style={{ textAlign: 'center' }}>L</th>
+                  <th style={{ textAlign: 'center' }}>Sets</th>
+                  <th style={{ textAlign: 'center', fontWeight: 800 }}>PTS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {liveStandings.slice(0, 8).map(s => (
+                  <tr key={s.team_id} style={{ background: s.rank <= 3 ? `rgba(124,58,237,${0.04 * (4 - s.rank)})` : '' }}>
+                    <td style={{ textAlign: 'center' }}>
+                      <span style={{ fontSize: s.rank <= 3 ? 18 : 12, fontWeight: 700 }}>
+                        {MEDALS[s.rank] || s.rank}
+                      </span>
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ width: 28, height: 28, borderRadius: 7, background: 'var(--grad1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#fff' }}>
+                          {s.team_name?.charAt(0)}
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>{s.team_name}</div>
+                          {s.division && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{s.division}</div>}
+                        </div>
+                      </div>
+                    </td>
+                    <td style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>{s.played}</td>
+                    <td style={{ textAlign: 'center', color: 'var(--green)', fontWeight: 700, fontSize: 13 }}>{s.wins}</td>
+                    <td style={{ textAlign: 'center', color: 'var(--pink)', fontSize: 13 }}>{s.losses}</td>
+                    <td style={{ textAlign: 'center', fontSize: 12 }}>
+                      <span style={{ color: 'var(--green)' }}>{s.sets_won}</span>
+                      <span style={{ color: 'var(--text-dim)', margin: '0 3px' }}>–</span>
+                      <span style={{ color: 'var(--pink)' }}>{s.sets_lost}</span>
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      <span style={{ fontSize: 16, fontWeight: 800, background: 'var(--grad1)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+                        {s.points}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
 
       {/* Teams grid (admin) */}

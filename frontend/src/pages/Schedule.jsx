@@ -186,8 +186,16 @@ function CreateMatchModal({ teams, onClose, onCreated }) {
     team_id: teams[0]?.id ?? '', opponent: '', match_date: '', home_away: 'home',
     competition: '', location: '', notes: '',
   })
+  const [allTeams, setAllTeams] = useState([])
   const [loading, setLoading] = useState(false)
   const set = f => e => setForm(v => ({ ...v, [f]: e.target.value }))
+
+  useEffect(() => {
+    api.get('/teams/public').then(({ data }) => setAllTeams(data.teams || [])).catch(() => {})
+  }, [])
+
+  // Teams available as opponents: all registered teams except the one the coach is playing as
+  const opponentOptions = allTeams.filter(t => t.id !== Number(form.team_id))
 
   async function submit(e) {
     e.preventDefault()
@@ -212,8 +220,20 @@ function CreateMatchModal({ teams, onClose, onCreated }) {
             <select className="select" required value={form.team_id} onChange={set('team_id')}>
               {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select></div>
-          <div className="form-row"><label>Opponent *</label>
-            <input className="input" required placeholder="Beirut Blockers" value={form.opponent} onChange={set('opponent')} /></div>
+          <div className="form-row">
+            <label>Opponent *</label>
+            <input
+              className="input"
+              required
+              list="opponent-list"
+              placeholder="Pick a team or type any name…"
+              value={form.opponent}
+              onChange={set('opponent')}
+            />
+            <datalist id="opponent-list">
+              {opponentOptions.map(t => <option key={t.id} value={t.name} />)}
+            </datalist>
+          </div>
           <div className="form-grid">
             <div className="form-row"><label>Date & Time *</label>
               <input className="input" type="datetime-local" required value={form.match_date} onChange={set('match_date')} /></div>
@@ -568,7 +588,7 @@ function LineupPanel({ match, canManage, onLineupSaved }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function Schedule() {
-  const { canManageFixtures, canManageLineups } = useAuth()
+  const { isAdmin, canManageFixtures, canSchedulePractice, canManageLineups } = useAuth()
   const toast = useToast()
   const [matches,  setMatches]  = useState([])
   const [teams,    setTeams]    = useState([])
@@ -618,10 +638,10 @@ export default function Schedule() {
   }, [tab, load, loadPractices])
 
   useEffect(() => {
-    if (canManageFixtures) {
+    if (canSchedulePractice) {
       api.get('/teams').then(({ data }) => setTeams(data.teams || [])).catch(() => {})
     }
-  }, [canManageFixtures])
+  }, [canSchedulePractice])
 
   const filteredMatches = matches.filter(m => {
     if (tab === 'upcoming') return m.status === 'scheduled'
@@ -649,10 +669,10 @@ export default function Schedule() {
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button className="btn btn-secondary" onClick={() => setShowCalSync(true)}>📅 Sync Calendar</button>
-          {canManageFixtures && tab !== 'practices' && (
+          {canManageFixtures && !isAdmin && tab !== 'practices' && (
             <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ Schedule Match</button>
           )}
-          {canManageFixtures && tab === 'practices' && (
+          {canSchedulePractice && tab === 'practices' && (
             <button className="btn btn-primary" onClick={() => setShowCreatePractice(true)}>+ Schedule Practice</button>
           )}
         </div>
@@ -679,7 +699,7 @@ export default function Schedule() {
             <div className="empty-state">
               <div className="empty-icon">🏋️</div>
               <p>No practice sessions scheduled yet</p>
-              {canManageFixtures && <button className="btn btn-primary" onClick={() => setShowCreatePractice(true)}>Schedule First Practice</button>}
+              {canSchedulePractice && <button className="btn btn-primary" onClick={() => setShowCreatePractice(true)}>Schedule First Practice</button>}
             </div>
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14 }}>

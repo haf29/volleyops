@@ -187,7 +187,44 @@ router.post('/', requireRole('admin'), [
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(name, division, season, coach_id, assistant_coach_id, max_players);
 
-  const team = db.prepare(`SELECT * FROM teams WHERE id = ?`).get(result.lastInsertRowid);
+  const teamId = result.lastInsertRowid;
+
+  // Auto-activate assigned staff so they can log in immediately
+  if (coach_id) db.prepare(`UPDATE users SET is_active = 1 WHERE id = ?`).run(Number(coach_id));
+  if (assistant_coach_id) db.prepare(`UPDATE users SET is_active = 1 WHERE id = ?`).run(Number(assistant_coach_id));
+
+  // Derive standings season: use team season, or latest existing, or current academic year
+  const standingsSeason = (() => {
+    if (season) return season;
+    const latest = db.prepare(`SELECT season FROM standings ORDER BY season DESC LIMIT 1`).get();
+    const yr = new Date().getFullYear();
+    return latest?.season || `${yr}-${yr + 1}`;
+  })();
+
+  db.prepare(`
+    INSERT OR IGNORE INTO standings (team_id, season, played, wins, losses, sets_won, sets_lost, points)
+    VALUES (?, ?, 0, 0, 0, 0, 0, 0)
+  `).run(teamId, standingsSeason);
+
+  const io = req.app.get('io');
+  if (io) io.emit('standings_updated', { team_id: teamId, season: standingsSeason });
+
+  // Auto-create team conversation with all current members
+  const convMemberIds = [...new Set([
+    req.user.id,
+    coach_id ? Number(coach_id) : null,
+    assistant_coach_id ? Number(assistant_coach_id) : null,
+  ].filter(Boolean))];
+
+  if (convMemberIds.length >= 2) {
+    const convRes = db.prepare(`
+      INSERT INTO conversations (name, type, team_id, created_by) VALUES (?, 'team', ?, ?)
+    `).run(name, teamId, req.user.id);
+    const insertConvMember = db.prepare(`INSERT OR IGNORE INTO conversation_members (conversation_id, user_id) VALUES (?, ?)`);
+    convMemberIds.forEach(mid => insertConvMember.run(convRes.lastInsertRowid, mid));
+  }
+
+  const team = db.prepare(`SELECT * FROM teams WHERE id = ?`).get(teamId);
   res.status(201).json(team);
 });
 
@@ -257,6 +294,10 @@ router.put('/:id', requireRole('admin', 'coach'), [
     SET ${setClause}, updated_at = datetime('now')
     WHERE id = ?
   `).run(...Object.values(updates), teamId);
+
+  // Auto-activate any newly assigned coach/assistant
+  if (updates.coach_id) db.prepare(`UPDATE users SET is_active = 1 WHERE id = ?`).run(Number(updates.coach_id));
+  if (updates.assistant_coach_id) db.prepare(`UPDATE users SET is_active = 1 WHERE id = ?`).run(Number(updates.assistant_coach_id));
 
   res.json(db.prepare(`SELECT * FROM teams WHERE id = ?`).get(teamId));
 });
@@ -344,6 +385,14 @@ router.post('/:id/players', requireRole('coach'), [
         'team',
         teamId,
       );
+
+      // Auto-add player to team conversation
+      if (player.user_id) {
+        const teamConv = db.prepare(`SELECT id FROM conversations WHERE team_id = ? AND type = 'team' LIMIT 1`).get(teamId);
+        if (teamConv) {
+          db.prepare(`INSERT OR IGNORE INTO conversation_members (conversation_id, user_id) VALUES (?, ?)`).run(teamConv.id, player.user_id);
+        }
+      }
 
       results.push({
         player_id: playerId,

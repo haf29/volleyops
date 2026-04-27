@@ -128,6 +128,93 @@ router.get('/conversations', (req, res) => {
   res.json({ conversations });
 });
 
+// Search users for new conversations.
+// mode=direct → who you can DM
+// mode=group  → who you can add to a group (team-scope only)
+router.get('/users/search', (req, res) => {
+  const { q = '', mode = 'direct' } = req.query;
+  const search = `%${q}%`;
+  const { id: userId, role } = req.user;
+
+  // Admin reaches everyone in both modes
+  if (role === 'admin') {
+    const users = db.prepare(`
+      SELECT id, name, email, role FROM users
+      WHERE id != ? AND (name LIKE ? OR email LIKE ?)
+      ORDER BY name ASC LIMIT 20
+    `).all(userId, search, search);
+    return res.json({ users });
+  }
+
+  // Roster player subquery for a placeholder list of team ids
+  function rosterSub(ph) {
+    return `SELECT p2.user_id FROM players p2
+            JOIN team_players tp2 ON tp2.player_id = p2.id
+            WHERE tp2.team_id IN (${ph}) AND tp2.is_active = 1 AND p2.user_id IS NOT NULL`;
+  }
+
+  if (role === 'coach' || role === 'assistant_coach') {
+    const col = role === 'coach' ? 'coach_id' : 'assistant_coach_id';
+    const teamIds = db.prepare(`SELECT id FROM teams WHERE ${col} = ?`).all(userId).map(r => r.id);
+    const ph = teamIds.length ? teamIds.map(() => '?').join(',') : 'NULL';
+
+    let sql, params;
+
+    if (mode === 'group') {
+      // Groups: team scope only — own roster players + the other staff on each team
+      if (!teamIds.length) return res.json({ users: [] });
+      const otherStaff = role === 'coach' ? 'assistant_coach_id' : 'coach_id';
+      sql = `
+        SELECT DISTINCT u.id, u.name, u.email, u.role
+        FROM users u
+        WHERE u.id != ? AND (u.name LIKE ? OR u.email LIKE ?)
+          AND u.id IN (
+            ${rosterSub(ph)}
+            UNION
+            SELECT ${otherStaff} FROM teams WHERE id IN (${ph}) AND ${otherStaff} IS NOT NULL
+          )
+        ORDER BY u.name ASC LIMIT 20`;
+      params = [userId, search, search, ...teamIds, ...teamIds];
+    } else {
+      // Direct: admin + ALL coaches + ALL assistant coaches + own team players only
+      sql = `
+        SELECT DISTINCT u.id, u.name, u.email, u.role
+        FROM users u
+        WHERE u.id != ? AND (u.name LIKE ? OR u.email LIKE ?)
+          AND (
+            u.role IN ('admin', 'coach', 'assistant_coach')
+            ${teamIds.length ? `OR u.id IN (${rosterSub(ph)})` : ''}
+          )
+        ORDER BY u.name ASC LIMIT 20`;
+      params = [userId, search, search, ...teamIds];
+    }
+
+    return res.json({ users: db.prepare(sql).all(...params) });
+  }
+
+  if (role === 'player') {
+    const player = db.prepare(`SELECT id FROM players WHERE user_id = ?`).get(userId);
+    if (!player) return res.json({ users: [] });
+    const teamIds = db.prepare(
+      `SELECT team_id FROM team_players WHERE player_id = ? AND is_active = 1`
+    ).all(player.id).map(r => r.team_id);
+    if (!teamIds.length) return res.json({ users: [] });
+    const ph = teamIds.map(() => '?').join(',');
+
+    // Both direct and group: teammates only (no admin, no staff)
+    const users = db.prepare(`
+      SELECT DISTINCT u.id, u.name, u.email, u.role
+      FROM users u
+      WHERE u.id != ? AND (u.name LIKE ? OR u.email LIKE ?)
+        AND u.id IN (${rosterSub(ph)})
+      ORDER BY u.name ASC LIMIT 20
+    `).all(userId, search, search, ...teamIds);
+    return res.json({ users });
+  }
+
+  res.json({ users: [] });
+});
+
 router.post('/conversations', [
   body('type').isIn(['direct', 'group', 'team', 'broadcast']),
   body('name').optional({ nullable: true }).trim(),
@@ -138,6 +225,25 @@ router.post('/conversations', [
 
   const { type, name = null, teamId = null } = req.body;
   let memberIds = Array.isArray(req.body.memberIds) ? req.body.memberIds.map(Number) : [];
+
+  // Deduplicate: if a direct conversation already exists between the two users, return it
+  if (type === 'direct' && memberIds.length === 1) {
+    const otherId = memberIds[0];
+    const existing = db.prepare(`
+      SELECT c.id FROM conversations c
+      JOIN conversation_members cm1 ON cm1.conversation_id = c.id AND cm1.user_id = ?
+      JOIN conversation_members cm2 ON cm2.conversation_id = c.id AND cm2.user_id = ?
+      WHERE c.type = 'direct'
+      LIMIT 1
+    `).get(req.user.id, otherId);
+    if (existing) {
+      return res.status(200).json({
+        conversation: db.prepare(`SELECT * FROM conversations WHERE id = ?`).get(existing.id),
+        members: getConversationMembers(existing.id),
+        existing: true,
+      });
+    }
+  }
 
   if (type === 'broadcast' && !['admin', 'coach'].includes(req.user.role)) {
     return res.status(403).json({ error: 'Only admins and coaches can create broadcasts' });

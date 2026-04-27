@@ -53,7 +53,10 @@ export function AuthProvider({ children }) {
   const isAssistant    = user?.role === 'assistant_coach'
   const canManage      = isAdmin || isCoach
   const canManageFixtures = isAdmin || isCoach
-  const canManageLineups = isCoach || isAssistant
+  // Assistant coaches can schedule practices but not matches or lineup assignments
+  const canSchedulePractice = isAdmin || isCoach || isAssistant
+  // Only the head coach (not assistant) makes starter/sub lineup decisions
+  const canManageLineups = isCoach
   // Only coaches can add/remove players from team rosters; admins are view-only for rosters
   const canManageRoster = isCoach
   const isPlayer       = user?.role === 'player'
@@ -70,7 +73,7 @@ export function AuthProvider({ children }) {
       user, loading,
       login, logout, setUserFromTokens,
       isAdmin, isCoach, isAssistant, canManage, canManageRoster,
-      canManageFixtures, canManageLineups,
+      canManageFixtures, canSchedulePractice, canManageLineups,
       isPlayer, playerStatus, isApproved,
     }}>
       {children}
