@@ -63,6 +63,21 @@ function getPlayerForUser(userId) {
   return db.prepare(`SELECT * FROM players WHERE user_id = ?`).get(userId);
 }
 
+function getOrCreateBillingPlayerForUser(userId) {
+  const existing = getPlayerForUser(userId);
+  if (existing) return existing;
+
+  const user = db.prepare(`SELECT id, name, email FROM users WHERE id = ?`).get(userId);
+  if (!user) return null;
+
+  const result = db.prepare(`
+    INSERT INTO players (user_id, name, email, registration_status, notes)
+    VALUES (?, ?, ?, 'approved', 'Billing profile for wallet purchases')
+  `).run(user.id, user.name, user.email);
+
+  return db.prepare(`SELECT * FROM players WHERE id = ?`).get(result.lastInsertRowid);
+}
+
 function getWalletSummary(userId) {
   const row = db.prepare(`
     SELECT
@@ -386,7 +401,7 @@ router.get('/wallet', (req, res) => {
 
   res.json({
     ...summary,
-    can_request_purchase: Boolean(player),
+    can_request_purchase: true,
     player_id: player?.id ?? null,
     transactions,
   });
@@ -440,9 +455,9 @@ router.post('/wallet/purchase-plan', [
     return res.status(403).json({ error: 'Admins cannot purchase plans from a wallet' });
   }
 
-  const player = getPlayerForUser(req.user.id);
+  const player = getOrCreateBillingPlayerForUser(req.user.id);
   if (!player) {
-    return res.status(400).json({ error: 'Only player-linked accounts can purchase a payment plan' });
+    return res.status(400).json({ error: 'Could not create a billing profile for this account' });
   }
 
   const plan = db.prepare(`SELECT * FROM payment_plans WHERE id = ? AND is_active = 1`).get(Number(req.body.planId));

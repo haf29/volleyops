@@ -111,10 +111,11 @@ router.get('/admin', authenticate, requireRole('admin'), (req, res) => {
       COALESCE(s.sets_won, 0) AS sets_won,
       COALESCE(s.sets_lost,0) AS sets_lost,
       (SELECT COUNT(CASE WHEN a.status IN ('present','late') THEN 1 END) * 100.0
-              / NULLIF(COUNT(a.id), 0)
-       FROM attendance a
-       JOIN training_sessions ts ON ts.id = a.session_id
-       WHERE ts.team_id = t.id)                                AS team_attendance_rate,
+              / NULLIF(COUNT(ts.id), 0)
+       FROM team_players tp3
+       JOIN training_sessions ts ON ts.team_id = tp3.team_id
+       LEFT JOIN attendance a ON a.session_id = ts.id AND a.player_id = tp3.player_id
+       WHERE tp3.team_id = t.id AND tp3.is_active = 1)          AS team_attendance_rate,
       (SELECT COUNT(*) FROM team_players tp2
        WHERE tp2.team_id = t.id AND tp2.is_active = 1)        AS player_count
     FROM teams t
@@ -176,6 +177,16 @@ router.get('/coach', authenticate, requireRole('admin', 'coach', 'assistant_coac
 
   const team = db.prepare(`SELECT * FROM teams WHERE id = ?`).get(tid);
   if (!team) return res.status(404).json({ error: 'Team not found' });
+  const statSeason = req.query.season
+    || team.season
+    || db.prepare(`
+      SELECT ps.season
+      FROM player_stats ps
+      JOIN team_players tp ON tp.player_id = ps.player_id AND tp.team_id = ?
+      ORDER BY ps.season DESC
+      LIMIT 1
+    `).get(tid)?.season
+    || '2024-2025';
 
   // ── KPIs ────────────────────────────────────────────────────────────────
   const standing = db.prepare(`
@@ -190,10 +201,11 @@ router.get('/coach', authenticate, requireRole('admin', 'coach', 'assistant_coac
   const attRow = db.prepare(`
     SELECT
       COUNT(CASE WHEN a.status IN ('present','late') THEN 1 END) * 100.0
-        / NULLIF(COUNT(a.id), 0) AS rate
-    FROM attendance a
-    JOIN training_sessions ts ON ts.id = a.session_id
-    WHERE ts.team_id = ?
+        / NULLIF(COUNT(ts.id), 0) AS rate
+    FROM team_players tp
+    JOIN training_sessions ts ON ts.team_id = tp.team_id
+    LEFT JOIN attendance a ON a.session_id = ts.id AND a.player_id = tp.player_id
+    WHERE tp.team_id = ? AND tp.is_active = 1
   `).get(tid);
   const teamAttendanceRate = attRow.rate ? Math.round(attRow.rate) : 0;
 
@@ -203,17 +215,17 @@ router.get('/coach', authenticate, requireRole('admin', 'coach', 'assistant_coac
       p.id,
       p.name,
       p.position,
-      COUNT(a.id)                                                         AS total_sessions,
+      COUNT(ts.id)                                                        AS total_sessions,
       COUNT(CASE WHEN a.status IN ('present','late') THEN 1 END)         AS attended,
       COUNT(CASE WHEN a.status IN ('present','late') THEN 1 END) * 100.0
-        / NULLIF(COUNT(a.id), 0)                                          AS rate
+        / NULLIF(COUNT(ts.id), 0)                                         AS rate
     FROM players p
     JOIN team_players tp ON tp.player_id = p.id AND tp.team_id = ?
-    LEFT JOIN attendance a ON a.player_id = p.id
-    LEFT JOIN training_sessions ts ON ts.id = a.session_id AND ts.team_id = ?
+    LEFT JOIN training_sessions ts ON ts.team_id = tp.team_id
+    LEFT JOIN attendance a ON a.session_id = ts.id AND a.player_id = p.id
     GROUP BY p.id
     ORDER BY rate DESC NULLS LAST
-  `).all(tid, tid).map(r => ({
+  `).all(tid).map(r => ({
     ...r,
     rate: r.rate ? Math.round(r.rate) : 0,
     risk: r.rate == null ? 'Unknown'
@@ -245,9 +257,10 @@ router.get('/coach', authenticate, requireRole('admin', 'coach', 'assistant_coac
     FROM player_stats ps
     JOIN players p ON p.id = ps.player_id
     JOIN team_players tp ON tp.player_id = p.id AND tp.team_id = ?
+    WHERE ps.season = ?
     ORDER BY ps.points DESC
     LIMIT 5
-  `).all(tid);
+  `).all(tid, statSeason);
 
   // ── Accessible teams list (for switcher) ─────────────────────────────────
   const teamList = db.prepare(
@@ -273,6 +286,7 @@ router.get('/coach', authenticate, requireRole('admin', 'coach', 'assistant_coac
     player_attendance: playerAttendance,
     recent_matches:    recentMatches,
     top_stats:         topStats,
+    stat_season:       statSeason,
   });
 });
 

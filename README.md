@@ -49,7 +49,7 @@ volleyops/
 cd backend
 cp .env.example .env        # fill in your secrets
 npm install
-node seed.js                # seed demo data (optional)
+node scripts/seed.js        # seed demo data only if DB is empty
 node server.js              # starts on :3001
 ```
 
@@ -82,6 +82,7 @@ See `backend/.env.example` for the full list. Key variables:
 | `JWT_SECRET` | Secret for signing access tokens |
 | `REFRESH_TOKEN_SECRET` | Secret for signing refresh tokens |
 | `PORT` | Port the server listens on (default: 3001) |
+| `APP_URL` | Frontend URL used in password reset links |
 | `CORS_ORIGINS` | Comma-separated allowed origins |
 | `DB_PATH` | Path to SQLite file (default: `./volleyops.db`) |
 | `ANTHROPIC_API_KEY` | API key for AI tactics feature |
@@ -94,3 +95,8 @@ The project uses two Railway services:
 - **volleyops-frontend** (frontend) — root directory: `frontend`
 
 Both use the Railpack builder with Node 20.
+
+For production persistence, attach a Railway volume to the backend service and keep `DB_PATH=/data/volleyops.db`.
+Set `APP_URL` to the deployed frontend URL so password reset emails do not point to localhost.
+
+Avoid running `backend/seed.js` directly on a real database: it wipes existing data. Use `backend/scripts/seed.js` for normal local and production startup.

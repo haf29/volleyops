@@ -169,7 +169,7 @@ function WalletTopUpModal({ onClose, onCreated }) {
   )
 }
 
-function WalletPanel({ wallet, canUsePlans, onAddFunds }) {
+function WalletPanel({ wallet, onAddFunds }) {
   if (!wallet) return null
 
   return (
@@ -183,12 +183,6 @@ function WalletPanel({ wallet, canUsePlans, onAddFunds }) {
         </div>
         <button className="btn btn-primary" onClick={onAddFunds}>Add Funds</button>
       </div>
-
-      {!canUsePlans && (
-        <div style={{ marginBottom: 16, padding: '12px 14px', borderRadius: 12, background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.22)', fontSize: 13, color: 'var(--text-muted)' }}>
-          Wallet top-up works, but plan purchase is available only for accounts linked to a player profile.
-        </div>
-      )}
 
       <div className="kpi-grid" style={{ marginBottom: wallet.transactions?.length ? 16 : 0 }}>
         <div className="kpi-card"><div className="kpi-icon green">W</div><div className="kpi-value">${Number(wallet.balance || 0).toLocaleString()}</div><div className="kpi-label">Available</div></div>
@@ -359,7 +353,7 @@ export default function Payments() {
     }
   }
 
-  const canPurchasePlan = Boolean(wallet?.player_id)
+  const canPurchasePlan = Boolean(wallet?.can_request_purchase)
 
   return (
     <div>
@@ -382,7 +376,7 @@ export default function Payments() {
 
       {!isAdmin && (
         <>
-          <WalletPanel wallet={wallet} canUsePlans={canPurchasePlan} onAddFunds={() => setShowTopUp(true)} />
+          <WalletPanel wallet={wallet} onAddFunds={() => setShowTopUp(true)} />
           <PlanStore plans={plans} walletBalance={Number(wallet?.balance || 0)} canPurchase={canPurchasePlan} purchasingPlanId={purchasingPlanId} onPurchase={purchasePlan} />
         </>
       )}

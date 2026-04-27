@@ -229,11 +229,14 @@ export default function Tryouts() {
   const { user } = useAuth()
   const toast = useToast()
   const isAdmin = user?.role === 'admin'
-  const isCoach = user?.role === 'coach' || isAdmin
+  const isPlayer = user?.role === 'player'
+  const canCreateTryouts = user?.role === 'coach' || isAdmin
+  const canManageCheckIn = ['admin', 'coach', 'assistant_coach'].includes(user?.role)
 
   const [tryouts, setTryouts] = useState([])
   const [teams,   setTeams]   = useState([])
   const [loading, setLoading] = useState(true)
+  const [registering, setRegistering] = useState(null)
   const [showCreate, setShowCreate]   = useState(false)
   const [checkinTarget, setCheckinTarget] = useState(null)
   const [filterOpen, setFilterOpen]   = useState('all') // 'all'|'1'|'0'
@@ -253,6 +256,19 @@ export default function Tryouts() {
 
   useEffect(() => { load() }, [load])
 
+  async function registerForTryout(tryout) {
+    setRegistering(tryout.id)
+    try {
+      await api.post(`/tryouts/${tryout.id}/register`)
+      toast('You are registered for this tryout', 'success')
+      await load()
+    } catch (err) {
+      toast(err.response?.data?.error || 'Failed to register', 'error')
+    } finally {
+      setRegistering(null)
+    }
+  }
+
   const displayed = tryouts.filter(t =>
     filterOpen === 'all' || String(t.is_open) === filterOpen
   )
@@ -261,10 +277,12 @@ export default function Tryouts() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-title">Tryout Check-In</div>
-          <div className="page-subtitle">Manage tryout sessions and track player attendance</div>
+          <div className="page-title">{isPlayer ? 'Tryouts' : 'Tryout Check-In'}</div>
+          <div className="page-subtitle">
+            {isPlayer ? 'Register for open tryouts and track your status' : 'Manage tryout sessions and track player attendance'}
+          </div>
         </div>
-        {isCoach && (
+        {canCreateTryouts && (
           <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Tryout</button>
         )}
       </div>
@@ -288,7 +306,7 @@ export default function Tryouts() {
       ) : displayed.length === 0 ? (
         <div className="empty-state">
           <div className="empty-icon">✅</div>
-          <p>No tryout sessions yet. Create one to start tracking check-ins.</p>
+          <p>{isPlayer ? 'No open tryouts are available for you yet.' : 'No tryout sessions yet. Create one to start tracking check-ins.'}</p>
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px,1fr))', gap: 16 }}>
@@ -326,10 +344,25 @@ export default function Tryouts() {
 
               {t.notes && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>{t.notes}</div>}
 
-              <button className="btn btn-primary" style={{ width: '100%' }}
-                onClick={() => setCheckinTarget(t)}>
-                Open Check-In Board
-              </button>
+              {isPlayer ? (
+                <button
+                  className={t.current_user_status ? 'btn btn-secondary' : 'btn btn-primary'}
+                  style={{ width: '100%', justifyContent: 'center' }}
+                  disabled={!t.is_open || Boolean(t.current_user_status) || registering === t.id}
+                  onClick={() => registerForTryout(t)}
+                >
+                  {registering === t.id
+                    ? 'Registering...'
+                    : t.current_user_status
+                      ? STATUS_LABEL[t.current_user_status] || 'Registered'
+                      : t.is_open ? 'Register for Tryout' : 'Closed'}
+                </button>
+              ) : canManageCheckIn ? (
+                <button className="btn btn-primary" style={{ width: '100%' }}
+                  onClick={() => setCheckinTarget(t)}>
+                  Open Check-In Board
+                </button>
+              ) : null}
             </div>
           ))}
         </div>

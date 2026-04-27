@@ -13,12 +13,29 @@ function validationErrors(req, res) {
 
 function accessibleTeamIds(user) {
   if (user.role === 'admin') return db.prepare(`SELECT id FROM teams`).all().map(r => r.id);
+  if (user.role === 'player') {
+    const player = db.prepare(`SELECT id FROM players WHERE user_id = ?`).get(user.id);
+    if (!player) return [];
+    return db.prepare(`
+      SELECT team_id FROM team_players
+      WHERE player_id = ? AND is_active = 1
+    `).all(player.id).map(r => r.team_id);
+  }
   return db.prepare(`SELECT id FROM teams WHERE coach_id = ? OR assistant_coach_id = ?`)
     .all(user.id, user.id).map(r => r.id);
 }
 
+function pushNotification(io, userId, type, title, body_) {
+  if (!io || !userId) return;
+  try {
+    db.prepare(`INSERT INTO notifications (user_id, type, title, body) VALUES (?, ?, ?, ?)`)
+      .run(userId, type, title, body_);
+    io.to(`user:${userId}`).emit('notification', { type, title, body: body_ });
+  } catch {}
+}
+
 // ─── GET /api/attendance/sessions ─────────────────────────────────────────────
-router.get('/sessions', authenticate, requireRole('admin', 'coach', 'assistant_coach'), (req, res) => {
+router.get('/sessions', authenticate, requireRole('admin', 'coach', 'assistant_coach', 'player'), (req, res) => {
   const { team_id, type } = req.query;
   const teamIds = accessibleTeamIds(req.user);
   if (!teamIds.length) return res.json({ sessions: [] });
@@ -66,11 +83,26 @@ router.post('/sessions', authenticate, requireRole('admin', 'coach'), [
   `).run(Number(team_id), date, type, title ?? null, notes ?? null, req.user.id);
 
   const session = db.prepare(`SELECT * FROM training_sessions WHERE id = ?`).get(result.lastInsertRowid);
+  const team = db.prepare(`SELECT name FROM teams WHERE id = ?`).get(Number(team_id));
+  const roster = db.prepare(`
+    SELECT p.user_id FROM team_players tp
+    JOIN players p ON p.id = tp.player_id
+    WHERE tp.team_id = ? AND tp.is_active = 1 AND p.user_id IS NOT NULL
+  `).all(Number(team_id));
+  const io = req.app.get('io');
+  roster.forEach(r => pushNotification(
+    io,
+    r.user_id,
+    'practice_scheduled',
+    'New Practice Scheduled',
+    `${team?.name || 'Your team'} has practice on ${new Date(date).toLocaleString()}`,
+  ));
+
   res.status(201).json({ session });
 });
 
 // ─── GET /api/attendance/sessions/:id ─────────────────────────────────────────
-router.get('/sessions/:id', authenticate, requireRole('admin', 'coach', 'assistant_coach'), (req, res) => {
+router.get('/sessions/:id', authenticate, requireRole('admin', 'coach', 'assistant_coach', 'player'), (req, res) => {
   const session = db.prepare(`
     SELECT ts.*, t.name AS team_name
     FROM training_sessions ts
@@ -131,13 +163,27 @@ router.post('/sessions/:id/mark', authenticate, requireRole('admin', 'coach', 'a
   });
   markAll(records);
 
+  const roster = db.prepare(`
+    SELECT DISTINCT p.user_id FROM attendance a
+    JOIN players p ON p.id = a.player_id
+    WHERE a.session_id = ? AND p.user_id IS NOT NULL
+  `).all(sessionId);
+  const io = req.app.get('io');
+  roster.forEach(r => pushNotification(
+    io,
+    r.user_id,
+    'attendance_marked',
+    'Attendance Updated',
+    'Your coach updated attendance for a practice session.',
+  ));
+
   res.json({ marked: records.length });
 });
 
 // ─── GET /api/attendance/summary ──────────────────────────────────────────────
 // Per-player attendance rates for a team.
 // Query: team_id (required), from_date?, to_date?
-router.get('/summary', authenticate, requireRole('admin', 'coach', 'assistant_coach'), (req, res) => {
+router.get('/summary', authenticate, requireRole('admin', 'coach', 'assistant_coach', 'player'), (req, res) => {
   const { team_id, from_date, to_date } = req.query;
   if (!team_id) return res.status(400).json({ error: 'team_id required' });
 
@@ -147,25 +193,26 @@ router.get('/summary', authenticate, requireRole('admin', 'coach', 'assistant_co
   }
 
   let dateFilter = '';
-  const params = [Number(team_id)];
+  const params = [];
   if (from_date) { dateFilter += ` AND ts.date >= ?`; params.push(from_date); }
   if (to_date)   { dateFilter += ` AND ts.date <= ?`; params.push(to_date); }
+  params.push(Number(team_id));
 
   const rows = db.prepare(`
     SELECT p.id AS player_id, p.name AS player_name, p.position, p.jersey_number,
-           COUNT(a.id)                                                  AS total_sessions,
+           COUNT(ts.id)                                                 AS total_sessions,
            SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END)       AS present,
            SUM(CASE WHEN a.status = 'absent'  THEN 1 ELSE 0 END)       AS absent,
            SUM(CASE WHEN a.status = 'late'    THEN 1 ELSE 0 END)       AS late,
            SUM(CASE WHEN a.status = 'excused' THEN 1 ELSE 0 END)       AS excused
     FROM team_players tp
     JOIN players p ON p.id = tp.player_id
-    LEFT JOIN attendance a ON a.player_id = p.id
-    LEFT JOIN training_sessions ts ON ts.id = a.session_id AND ts.team_id = ? ${dateFilter}
+    LEFT JOIN training_sessions ts ON ts.team_id = tp.team_id ${dateFilter}
+    LEFT JOIN attendance a ON a.session_id = ts.id AND a.player_id = p.id
     WHERE tp.team_id = ? AND tp.is_active = 1
     GROUP BY p.id
     ORDER BY p.name ASC
-  `).all(Number(team_id), ...params.slice(1), Number(team_id));
+  `).all(...params);
 
   const summary = rows.map(r => ({
     ...r,

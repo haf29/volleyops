@@ -309,7 +309,8 @@ router.post('/forgot-password', [
       secure: false,
       auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
     });
-    const resetUrl = `${process.env.APP_URL || 'http://localhost:3000'}/reset-password?token=${token}`;
+    const appUrl = (process.env.APP_URL || req.get('origin') || 'http://localhost:3000').replace(/\/$/, '');
+    const resetUrl = `${appUrl}/reset-password?token=${token}`;
     transporter.sendMail({
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
       to: email,

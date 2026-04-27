@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
 import { useAuth } from './AuthContext'
+import { getAccessToken, SOCKET_BASE_URL } from '../api/client'
 
 const SocketContext = createContext(null)
 
@@ -19,8 +20,9 @@ export function SocketProvider({ children }) {
       return
     }
 
-    const token = localStorage.getItem('accessToken')
-    const socket = io({ auth: { token }, transports: ['websocket'] })
+    const token = getAccessToken()
+    const options = { auth: { token }, transports: ['websocket'] }
+    const socket = SOCKET_BASE_URL ? io(SOCKET_BASE_URL, options) : io(options)
     socketRef.current = socket
 
     socket.on('connect',    () => setConnected(true))

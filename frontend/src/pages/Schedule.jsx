@@ -47,7 +47,7 @@ function CalendarSyncModal({ onClose }) {
         ) : tokenData ? (
           <div>
             <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 20 }}>
-              Sync your matches and training sessions with any calendar app. Your personal calendar link is private — anyone with the URL can view your schedule.
+              Open your matches and training sessions in Google Calendar. Your personal calendar link is private, so anyone with the URL can view your schedule.
             </p>
             <div style={{ marginBottom: 16 }}>
               <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.07em', display: 'block', marginBottom: 6 }}>Calendar Feed URL</label>
@@ -59,23 +59,18 @@ function CalendarSyncModal({ onClose }) {
               </div>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <a href={tokenData.webcal_url} style={{ display: 'block' }}>
-                <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
-                  🗓 Subscribe in Calendar App (webcal)
-                </button>
-              </a>
               <button className="btn btn-secondary" style={{ width: '100%', justifyContent: 'center' }} onClick={downloadIcs}>
                 ⬇️ Download .ics File
               </button>
-              <a href={`https://calendar.google.com/calendar/r?cid=${encodeURIComponent(tokenData.webcal_url)}`} target="_blank" rel="noreferrer" style={{ display: 'block' }}>
-                <button className="btn btn-secondary" style={{ width: '100%', justifyContent: 'center' }}>
+              <a href={`https://calendar.google.com/calendar/r?cid=${encodeURIComponent(tokenData.feed_url)}`} target="_blank" rel="noreferrer" style={{ display: 'block' }}>
+                <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
                   <img src="https://www.google.com/favicon.ico" alt="" style={{ width: 14, height: 14, marginRight: 6 }} />
                   Add to Google Calendar
                 </button>
               </a>
             </div>
             <p style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 16 }}>
-              ℹ️ This URL is unique to your account. Keep it private. Includes all matches and practices for your teams.
+              This private feed includes all matches and practices for your teams.
             </p>
           </div>
         ) : (
@@ -256,7 +251,42 @@ function ResultModal({ match, onClose, onSaved }) {
     status: 'completed',
   })
   const [loading, setLoading] = useState(false)
+  const [playerStats, setPlayerStats] = useState([])
+  const [statsLoading, setStatsLoading] = useState(true)
   const set = f => e => setForm(v => ({ ...v, [f]: e.target.value }))
+
+  useEffect(() => {
+    let alive = true
+    setStatsLoading(true)
+    api.get(`/matches/${match.id}/stats`)
+      .then(({ data }) => {
+        if (!alive) return
+        setPlayerStats((data.players || []).map(p => ({
+          ...p,
+          sets_played: p.sets_played ?? 0,
+          points: p.points ?? 0,
+          kills: p.kills ?? 0,
+          aces: p.aces ?? 0,
+          blocks: p.blocks ?? 0,
+          digs: p.digs ?? 0,
+          errors: p.errors ?? 0,
+        })))
+      })
+      .catch(() => {
+        if (alive) toast('Failed to load roster stats', 'error')
+      })
+      .finally(() => {
+        if (alive) setStatsLoading(false)
+      })
+    return () => { alive = false }
+  }, [match.id])
+
+  function setStat(playerId, field, value) {
+    const clean = Math.max(0, Number(value) || 0)
+    setPlayerStats(prev => prev.map(p => (
+      p.player_id === playerId ? { ...p, [field]: clean } : p
+    )))
+  }
 
   async function submit(e) {
     e.preventDefault()
@@ -269,17 +299,31 @@ function ResultModal({ match, onClose, onSaved }) {
         score_us: Number(form.score_us) || null,
         score_them: Number(form.score_them) || null,
       })
-      toast('Result saved', 'success')
+      if (playerStats.length) {
+        await api.post(`/matches/${match.id}/stats`, {
+          stats: playerStats.map(p => ({
+            player_id: p.player_id,
+            sets_played: Number(p.sets_played) || 0,
+            points: Number(p.points) || 0,
+            kills: Number(p.kills) || 0,
+            aces: Number(p.aces) || 0,
+            blocks: Number(p.blocks) || 0,
+            digs: Number(p.digs) || 0,
+            errors: Number(p.errors) || 0,
+          })),
+        })
+      }
+      toast('Result and player stats saved', 'success')
       onSaved()
-    } catch { toast('Failed', 'error') }
+    } catch (err) { toast(err.response?.data?.error || 'Failed', 'error') }
     finally { setLoading(false) }
   }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 400 }} onClick={e => e.stopPropagation()}>
+      <div className="modal" style={{ maxWidth: 900, maxHeight: '88vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <span className="modal-title">Record Result</span>
+          <span className="modal-title">Record Result & Player Stats</span>
           <button className="modal-close" onClick={onClose}>✕</button>
         </div>
         <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
@@ -297,9 +341,58 @@ function ResultModal({ match, onClose, onSaved }) {
               <input className="input" type="number" min="0" max="3" value={form.sets_them} onChange={set('sets_them')} style={{ textAlign: 'center', fontSize: 24, fontWeight: 800, padding: '8px 0' }} />
             </div>
           </div>
+          <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+            <div style={{ fontWeight: 800, marginBottom: 4 }}>Player Match Stats</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
+              These numbers update dashboard leaders and analytics after saving.
+            </div>
+            {statsLoading ? (
+              <div className="loading-center" style={{ minHeight: 120 }}><div className="spinner" /></div>
+            ) : playerStats.length === 0 ? (
+              <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, border: '1px solid var(--border)', borderRadius: 10 }}>
+                No active roster players found for this team.
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 10 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+                  <thead>
+                    <tr style={{ background: 'var(--surface2)' }}>
+                      {['Player','Sets','Pts','Kills','Aces','Blocks','Digs','Errors'].map(h => (
+                        <th key={h} style={{ padding: '8px 10px', textAlign: h === 'Player' ? 'left' : 'center', fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.06em' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {playerStats.map(p => (
+                      <tr key={p.player_id} style={{ borderTop: '1px solid var(--border)' }}>
+                        <td style={{ padding: '8px 10px', minWidth: 180 }}>
+                          <div style={{ fontWeight: 700, fontSize: 13 }}>{p.player_name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                            {POS_LABELS[p.position] || 'No position'}{p.role ? ` - ${p.role}` : ''}
+                          </div>
+                        </td>
+                        {['sets_played','points','kills','aces','blocks','digs','errors'].map(field => (
+                          <td key={field} style={{ padding: 6 }}>
+                            <input
+                              className="input"
+                              type="number"
+                              min="0"
+                              value={p[field]}
+                              onChange={e => setStat(p.player_id, field, e.target.value)}
+                              style={{ width: 72, textAlign: 'center', padding: '7px 4px' }}
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
           <div className="form-actions">
             <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={loading}>{loading ? 'Saving…' : 'Save Result'}</button>
+            <button type="submit" className="btn btn-primary" disabled={loading || statsLoading}>{loading ? 'Saving…' : 'Save Result & Stats'}</button>
           </div>
         </form>
       </div>
@@ -499,8 +592,13 @@ export default function Schedule() {
       if (tab === 'past')     params.status   = 'completed'
       if (tab === 'practices') { setLoading(false); return }
       const { data } = await api.get('/matches', { params })
-      setMatches(data.matches || [])
-      if (!selected && data.matches?.length) setSelected(data.matches[0])
+      const nextMatches = data.matches || []
+      setMatches(nextMatches)
+      setSelected(prev => {
+        if (!nextMatches.length) return null
+        if (!prev) return nextMatches[0]
+        return nextMatches.find(m => m.id === prev.id) || nextMatches[0]
+      })
     } catch { toast('Failed to load schedule', 'error') }
     finally { setLoading(false) }
   }, [tab])
@@ -603,7 +701,7 @@ export default function Schedule() {
                     </div>
                     {s.notes && <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic', marginTop: 4 }}>{s.notes}</div>}
                     <div style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{s.attendance_count ?? 0} marked</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{s.marked_count ?? 0} marked</span>
                     </div>
                   </div>
                 )
@@ -715,9 +813,9 @@ export default function Schedule() {
                       <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 700 }}>SETS</div>
                     </div>
                   )}
-                  {canManageFixtures && selected.status === 'scheduled' && (
+                  {canManageFixtures && ['scheduled', 'completed'].includes(selected.status) && (
                     <button className="btn btn-secondary btn-sm" onClick={() => setShowResult(selected)}>
-                      Record Result
+                      {selected.status === 'completed' ? 'Edit Result & Stats' : 'Record Result'}
                     </button>
                   )}
                 </div>

@@ -33,3 +33,8 @@ Thumbs.db
 
 # Misc
 volleyops-jira-tasks.json
+
+# Secrets
+backend/.env
+frontend/.env
+*.key

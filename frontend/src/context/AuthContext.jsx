@@ -1,5 +1,11 @@
 import { createContext, useContext, useState, useEffect } from 'react'
-import api from '../api/client'
+import api, {
+  clearSessionTokens,
+  clearSharedTokens,
+  getAccessToken,
+  getRefreshToken,
+  setSessionTokens,
+} from '../api/client'
 
 const AuthContext = createContext(null)
 
@@ -7,13 +13,14 @@ export function AuthProvider({ children }) {
   const [user, setUser]       = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // Restore session from localStorage
+  // Restore this tab's session. sessionStorage keeps separate browser tabs independent.
   useEffect(() => {
-    const token = localStorage.getItem('accessToken')
+    clearSharedTokens()
+    const token = getAccessToken()
     if (token) {
       api.get('/auth/me')
         .then(({ data }) => setUser(data))
-        .catch(() => { localStorage.clear(); setUser(null) })
+        .catch(() => { clearSessionTokens(); setUser(null) })
         .finally(() => setLoading(false))
     } else {
       setLoading(false)
@@ -22,8 +29,7 @@ export function AuthProvider({ children }) {
 
   async function login(email, password) {
     const { data } = await api.post('/auth/login', { email, password })
-    localStorage.setItem('accessToken',  data.accessToken)
-    localStorage.setItem('refreshToken', data.refreshToken)
+    setSessionTokens(data)
     // Fetch full profile so player_status is included
     const { data: me } = await api.get('/auth/me')
     setUser(me)
@@ -36,9 +42,9 @@ export function AuthProvider({ children }) {
   }
 
   async function logout() {
-    const refreshToken = localStorage.getItem('refreshToken')
+    const refreshToken = getRefreshToken()
     try { await api.post('/auth/logout', { refreshToken }) } catch {}
-    localStorage.clear()
+    clearSessionTokens()
     setUser(null)
   }
 

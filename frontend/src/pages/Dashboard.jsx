@@ -422,7 +422,7 @@ function PlayerDashboard({ user }) {
 function TeamStatsPanel({ players, standings, tab, onTab }) {
   const BAR_COLOR = { scorers: '#7c3aed', servers: '#06b6d4', blockers: '#f59e0b', diggers: '#10b981' }
   const tabs = [
-    { id: 'scorers',  label: '🏐 Top Scorers',  key: 'kills',  perMatch: 'kills_per_match',  unit: 'kills' },
+    { id: 'scorers',  label: '🏐 Top Scorers',  key: 'points', perMatch: 'points_per_match', unit: 'pts' },
     { id: 'servers',  label: '💨 Top Servers',  key: 'aces',   perMatch: 'aces_per_match',   unit: 'aces'  },
     { id: 'blockers', label: '🛡 Top Blockers', key: 'blocks', perMatch: 'blocks_per_match', unit: 'blocks'},
     { id: 'diggers',  label: '🤿 Top Diggers',  key: 'digs',   perMatch: 'digs_per_match',   unit: 'digs'  },

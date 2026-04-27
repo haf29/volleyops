@@ -1,19 +1,58 @@
 @echo off
+setlocal
+
+set "ROOT=%~dp0"
+
 echo Starting VolleyOps...
+echo.
 
-REM Find node path
-set NODE=C:\Program Files\nodejs\node.exe
+where node >nul 2>nul
+if errorlevel 1 (
+  echo Node.js was not found on PATH. Please install Node.js 20.x and try again.
+  pause
+  exit /b 1
+)
 
-REM Start backend
+where npm >nul 2>nul
+if errorlevel 1 (
+  echo npm was not found on PATH. Please reinstall Node.js 20.x and try again.
+  pause
+  exit /b 1
+)
+
+if not exist "%ROOT%backend\node_modules" (
+  echo Installing backend dependencies...
+  pushd "%ROOT%backend"
+  call npm install
+  if errorlevel 1 (
+    popd
+    echo Backend dependency installation failed.
+    pause
+    exit /b 1
+  )
+  popd
+)
+
+if not exist "%ROOT%frontend\node_modules" (
+  echo Installing frontend dependencies...
+  pushd "%ROOT%frontend"
+  call npm install
+  if errorlevel 1 (
+    popd
+    echo Frontend dependency installation failed.
+    pause
+    exit /b 1
+  )
+  popd
+)
+
 echo Starting backend on port 3001...
-start "VolleyOps Backend" cmd /k "cd /d "%~dp0backend" && "%NODE%" server.js"
+start "VolleyOps Backend" cmd /k "cd /d ""%ROOT%backend"" && npm start"
 
-REM Wait a moment
 timeout /t 2 /nobreak >nul
 
-REM Start frontend
 echo Starting frontend on port 3000...
-start "VolleyOps Frontend" cmd /k "cd /d "%~dp0frontend" && "%NODE%" node_modules\vite\bin\vite.js"
+start "VolleyOps Frontend" cmd /k "cd /d ""%ROOT%frontend"" && npm run dev"
 
 echo.
 echo VolleyOps is starting up!

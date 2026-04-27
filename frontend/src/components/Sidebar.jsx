@@ -19,9 +19,9 @@ const NAV = [
     { to: '/messages', icon: '💬', label: 'Communication' },
   ]},
   { section: 'Tryouts & Scouting', items: [
-    { to: '/tryouts',      icon: '✅', label: 'Check-In',      roles: ['admin','coach','assistant_coach'] },
+    { to: '/tryouts',      icon: '✅', label: 'Check-In', playerLabel: 'Tryouts', roles: ['admin','coach','assistant_coach','player'] },
     { to: '/evaluations',  icon: '📊', label: 'Evaluations',   roles: ['admin','coach','assistant_coach'] },
-    { to: '/ai-placement', icon: '🤖', label: 'AI Placement',  roles: ['admin','coach'] },
+    { to: '/ai-placement', icon: '🤖', label: 'AI Positions',  roles: ['admin','coach'] },
     { to: '/attendance',   icon: '📅', label: 'Attendance',    roles: ['admin','coach','assistant_coach'] },
   ]},
   { section: 'Account', items: [
@@ -52,7 +52,7 @@ export default function Sidebar() {
                   }
                 >
                   <span className="s-icon">{item.icon}</span>
-                  {item.label}
+                  {user?.role === 'player' && item.playerLabel ? item.playerLabel : item.label}
                 </NavLink>
               ))}
             </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import api from '../api/client'
+import api, { setSessionTokens } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 
 const POSITIONS = ['setter','libero','outside_hitter','opposite','middle_blocker','defensive_specialist']
@@ -85,8 +85,7 @@ export default function Register() {
       }
 
       const { data } = await api.post('/auth/register', payload)
-      localStorage.setItem('accessToken',  data.accessToken)
-      localStorage.setItem('refreshToken', data.refreshToken)
+      setSessionTokens(data)
       setUserFromTokens(data.user)
       navigate('/dashboard')
     } catch (err) {

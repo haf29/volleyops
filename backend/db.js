@@ -1,9 +1,13 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
 
 // In production on Railway, DB_PATH points to a persistent Volume mount (e.g. /data/volleyops.db).
 // Locally it falls back to the file next to this script.
-const dbPath = process.env.DB_PATH || path.join(__dirname, 'volleyops.db');
+const dbPath = process.env.DB_PATH
+  ? path.resolve(__dirname, process.env.DB_PATH)
+  : path.join(__dirname, 'volleyops.db');
+fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 const db = new Database(dbPath);
 
 // Performance + integrity
@@ -308,6 +312,25 @@ db.exec(`
     digs           INTEGER NOT NULL DEFAULT 0,
     errors         INTEGER NOT NULL DEFAULT 0,
     UNIQUE(player_id, season)
+  );
+`);
+
+// Match-by-match stat lines. Season totals in player_stats are recomputed from these rows.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS match_player_stats (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id    INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    sets_played INTEGER NOT NULL DEFAULT 0,
+    points      INTEGER NOT NULL DEFAULT 0,
+    kills       INTEGER NOT NULL DEFAULT 0,
+    aces        INTEGER NOT NULL DEFAULT 0,
+    blocks      INTEGER NOT NULL DEFAULT 0,
+    digs        INTEGER NOT NULL DEFAULT 0,
+    errors      INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(match_id, player_id)
   );
 `);
 

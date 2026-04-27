@@ -45,6 +45,125 @@ function teamIdsForUser(user) {
   return [];
 }
 
+function seasonForMatch(match) {
+  const team = db.prepare(`SELECT season FROM teams WHERE id = ?`).get(match.team_id);
+  if (team?.season) return team.season;
+
+  const date = match.match_date ? new Date(match.match_date) : new Date();
+  const year = Number.isNaN(date.getTime()) ? new Date().getFullYear() : date.getFullYear();
+  const start = date.getMonth() >= 7 ? year : year - 1;
+  return `${start}-${start + 1}`;
+}
+
+function recomputeStandingForTeam(teamId, season) {
+  const matches = db.prepare(`
+    SELECT sets_us, sets_them
+    FROM matches
+    WHERE team_id = ?
+      AND status = 'completed'
+      AND sets_us IS NOT NULL
+      AND sets_them IS NOT NULL
+  `).all(teamId);
+
+  const totals = matches.reduce((acc, match) => {
+    const setsUs = Number(match.sets_us) || 0;
+    const setsThem = Number(match.sets_them) || 0;
+    acc.played += 1;
+    acc.sets_won += setsUs;
+    acc.sets_lost += setsThem;
+    if (setsUs > setsThem) {
+      acc.wins += 1;
+      acc.points += 3;
+    } else {
+      acc.losses += 1;
+    }
+    return acc;
+  }, { played: 0, wins: 0, losses: 0, sets_won: 0, sets_lost: 0, points: 0 });
+
+  db.prepare(`
+    INSERT INTO standings (team_id, season, played, wins, losses, sets_won, sets_lost, points)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(team_id, season) DO UPDATE SET
+      played = excluded.played,
+      wins = excluded.wins,
+      losses = excluded.losses,
+      sets_won = excluded.sets_won,
+      sets_lost = excluded.sets_lost,
+      points = excluded.points,
+      updated_at = datetime('now')
+  `).run(
+    teamId,
+    season,
+    totals.played,
+    totals.wins,
+    totals.losses,
+    totals.sets_won,
+    totals.sets_lost,
+    totals.points,
+  );
+}
+
+function recomputePlayerSeasonStats(teamId, season, playerIds) {
+  const ids = [...new Set(playerIds.map(Number).filter(Boolean))];
+  if (!ids.length) return;
+
+  const aggregate = db.prepare(`
+    SELECT
+      COUNT(DISTINCT CASE
+        WHEN mps.sets_played > 0 OR mps.points > 0 OR mps.kills > 0 OR mps.aces > 0
+          OR mps.blocks > 0 OR mps.digs > 0 OR mps.errors > 0
+        THEN mps.match_id
+      END) AS matches_played,
+      COALESCE(SUM(mps.sets_played), 0) AS sets_played,
+      COALESCE(SUM(mps.points), 0) AS points,
+      COALESCE(SUM(mps.kills), 0) AS kills,
+      COALESCE(SUM(mps.aces), 0) AS aces,
+      COALESCE(SUM(mps.blocks), 0) AS blocks,
+      COALESCE(SUM(mps.digs), 0) AS digs,
+      COALESCE(SUM(mps.errors), 0) AS errors
+    FROM match_player_stats mps
+    JOIN matches m ON m.id = mps.match_id
+    WHERE mps.player_id = ?
+      AND m.team_id = ?
+      AND m.status = 'completed'
+  `);
+
+  const upsert = db.prepare(`
+    INSERT INTO player_stats (
+      player_id, season, matches_played, sets_played, points, kills, aces, blocks, digs, errors
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(player_id, season) DO UPDATE SET
+      matches_played = excluded.matches_played,
+      sets_played = excluded.sets_played,
+      points = excluded.points,
+      kills = excluded.kills,
+      aces = excluded.aces,
+      blocks = excluded.blocks,
+      digs = excluded.digs,
+      errors = excluded.errors
+  `);
+
+  const recompute = db.transaction(() => {
+    ids.forEach((playerId) => {
+      const totals = aggregate.get(playerId, teamId);
+      upsert.run(
+        playerId,
+        season,
+        totals.matches_played || 0,
+        totals.sets_played || 0,
+        totals.points || 0,
+        totals.kills || 0,
+        totals.aces || 0,
+        totals.blocks || 0,
+        totals.digs || 0,
+        totals.errors || 0,
+      );
+    });
+  });
+
+  recompute();
+}
+
 // ─── GET /api/matches ─────────────────────────────────────────────────────────
 router.get('/', authenticate, (req, res) => {
   const { team_id, status, upcoming } = req.query;
@@ -184,6 +303,125 @@ router.get('/:id', authenticate, (req, res) => {
   res.json({ ...match, lineup, unassigned });
 });
 
+router.get('/:id/stats', authenticate, (req, res) => {
+  const match = db.prepare(`
+    SELECT m.*, t.name AS team_name
+    FROM matches m
+    JOIN teams t ON t.id = m.team_id
+    WHERE m.id = ?
+  `).get(req.params.id);
+
+  if (!match) return res.status(404).json({ error: 'Match not found' });
+
+  const allowed = teamIdsForUser(req.user);
+  if (!allowed.includes(match.team_id)) return res.status(403).json({ error: 'Forbidden' });
+
+  const players = db.prepare(`
+    SELECT
+      p.id AS player_id,
+      p.name AS player_name,
+      p.position,
+      p.jersey_number,
+      ml.role,
+      COALESCE(mps.sets_played, 0) AS sets_played,
+      COALESCE(mps.points, 0) AS points,
+      COALESCE(mps.kills, 0) AS kills,
+      COALESCE(mps.aces, 0) AS aces,
+      COALESCE(mps.blocks, 0) AS blocks,
+      COALESCE(mps.digs, 0) AS digs,
+      COALESCE(mps.errors, 0) AS errors
+    FROM team_players tp
+    JOIN players p ON p.id = tp.player_id
+    LEFT JOIN match_lineups ml ON ml.match_id = ? AND ml.player_id = p.id
+    LEFT JOIN match_player_stats mps ON mps.match_id = ? AND mps.player_id = p.id
+    WHERE tp.team_id = ? AND tp.is_active = 1
+    ORDER BY
+      CASE ml.role WHEN 'starter' THEN 0 WHEN 'substitute' THEN 1 ELSE 2 END,
+      p.name ASC
+  `).all(match.id, match.id, match.team_id);
+
+  res.json({ match, season: seasonForMatch(match), players });
+});
+
+router.post('/:id/stats', authenticate, requireRole('admin', 'coach', 'assistant_coach'), [
+  body('stats').isArray({ min: 1 }),
+  body('stats.*.player_id').isInt({ min: 1 }),
+  body('stats.*.sets_played').optional().isInt({ min: 0 }),
+  body('stats.*.points').optional().isInt({ min: 0 }),
+  body('stats.*.kills').optional().isInt({ min: 0 }),
+  body('stats.*.aces').optional().isInt({ min: 0 }),
+  body('stats.*.blocks').optional().isInt({ min: 0 }),
+  body('stats.*.digs').optional().isInt({ min: 0 }),
+  body('stats.*.errors').optional().isInt({ min: 0 }),
+], (req, res) => {
+  if (validationErrors(req, res)) return;
+
+  const match = db.prepare(`SELECT * FROM matches WHERE id = ?`).get(req.params.id);
+  if (!match) return res.status(404).json({ error: 'Match not found' });
+
+  const allowed = teamIdsForUser(req.user);
+  if (!allowed.includes(match.team_id)) return res.status(403).json({ error: 'Forbidden' });
+  if (match.status !== 'completed') {
+    return res.status(400).json({ error: 'Record the match result before saving player stats' });
+  }
+
+  const rosterIds = new Set(db.prepare(`
+    SELECT player_id FROM team_players
+    WHERE team_id = ? AND is_active = 1
+  `).all(match.team_id).map(r => r.player_id));
+
+  const rows = req.body.stats.map((row) => ({
+    player_id: Number(row.player_id),
+    sets_played: Number(row.sets_played) || 0,
+    points: Number(row.points) || 0,
+    kills: Number(row.kills) || 0,
+    aces: Number(row.aces) || 0,
+    blocks: Number(row.blocks) || 0,
+    digs: Number(row.digs) || 0,
+    errors: Number(row.errors) || 0,
+  }));
+
+  const invalid = rows.find(row => !rosterIds.has(row.player_id));
+  if (invalid) {
+    return res.status(403).json({ error: 'Stats can only be recorded for players on this team roster' });
+  }
+
+  const upsert = db.prepare(`
+    INSERT INTO match_player_stats (
+      match_id, player_id, sets_played, points, kills, aces, blocks, digs, errors
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(match_id, player_id) DO UPDATE SET
+      sets_played = excluded.sets_played,
+      points = excluded.points,
+      kills = excluded.kills,
+      aces = excluded.aces,
+      blocks = excluded.blocks,
+      digs = excluded.digs,
+      errors = excluded.errors,
+      updated_at = datetime('now')
+  `);
+
+  const saveAll = db.transaction(() => {
+    rows.forEach(row => upsert.run(
+      match.id,
+      row.player_id,
+      row.sets_played,
+      row.points,
+      row.kills,
+      row.aces,
+      row.blocks,
+      row.digs,
+      row.errors,
+    ));
+  });
+  saveAll();
+
+  const season = seasonForMatch(match);
+  recomputePlayerSeasonStats(match.team_id, season, rows.map(row => row.player_id));
+
+  res.json({ saved: rows.length, season });
+});
+
 // ─── PUT /api/matches/:id ─────────────────────────────────────────────────────
 router.put('/:id', authenticate, requireRole('admin', 'coach'), [
   body('opponent').optional().trim().notEmpty(),
@@ -223,6 +461,27 @@ router.put('/:id', authenticate, requireRole('admin', 'coach'), [
   const updated = db.prepare(`
     SELECT m.*, t.name AS team_name FROM matches m JOIN teams t ON t.id = m.team_id WHERE m.id = ?
   `).get(match.id);
+
+  const season = seasonForMatch(updated);
+  recomputeStandingForTeam(updated.team_id, season);
+
+  if (updated.status === 'completed' && updated.sets_us != null && updated.sets_them != null) {
+    const roster = db.prepare(`
+      SELECT p.user_id FROM team_players tp
+      JOIN players p ON p.id = tp.player_id
+      WHERE tp.team_id = ? AND tp.is_active = 1 AND p.user_id IS NOT NULL
+    `).all(updated.team_id);
+    const io = req.app.get('io');
+    const resultLabel = Number(updated.sets_us) > Number(updated.sets_them) ? 'won' : 'lost';
+    roster.forEach(r => pushNotification(
+      io,
+      r.user_id,
+      'match_result',
+      'Match Result Recorded',
+      `${updated.team_name} ${resultLabel} ${updated.sets_us}-${updated.sets_them} vs ${updated.opponent}.`,
+    ));
+  }
+
   res.json(updated);
 });
 

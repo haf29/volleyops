@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import api from '../api/client'
-import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
 
 // ─── Mock AI engine ────────────────────────────────────────────────────────────
@@ -172,6 +171,17 @@ function drawZone(ctx, z) {
 function roundRect(ctx, x, y, w, h, radii) { ctx.beginPath(); ctx.roundRect(x, y, w, h, radii) }
 function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y) }
 
+function formatChatText(text) {
+  const escaped = String(text || '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[char]))
+  return escaped.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+}
+
 const FORMATIONS = {
   '6-2': { our: [[0.5,0.18],[0.17,0.35],[0.83,0.35],[0.17,0.1],[0.83,0.1],[0.5,0.37]], opp: [[0.5,0.63],[0.17,0.75],[0.83,0.75],[0.17,0.9],[0.83,0.9],[0.5,0.82]] },
   '5-1': { our: [[0.5,0.15],[0.17,0.32],[0.83,0.32],[0.17,0.12],[0.83,0.12],[0.5,0.4]], opp: [[0.5,0.65],[0.17,0.75],[0.83,0.75],[0.17,0.9],[0.83,0.9],[0.5,0.85]] },
@@ -181,7 +191,6 @@ const FORMATIONS = {
 // ─── Component ─────────────────────────────────────────────────────────────────
 
 export default function TacticsBoard() {
-  const { user } = useAuth()
   const toast = useToast()
 
   const canvasRef = useRef(null)
@@ -198,7 +207,8 @@ export default function TacticsBoard() {
   const [boards,    setBoards]    = useState([])
   const [activeBoardId, setActiveBoardId] = useState(null)
   const [saving, setSaving] = useState(false)
-  const [teamStats, setTeamStats] = useState([])
+  const [teams, setTeams] = useState([])
+  const [selectedTeamId, setSelectedTeamId] = useState('')
   // board-level notes (saved with the board)
   const [notes,  setNotes]  = useState('')
   const [notesSaved, setNotesSaved] = useState(true)
@@ -397,7 +407,13 @@ export default function TacticsBoard() {
   }, [])
 
   useEffect(() => {
-    api.get('/players/stats').then(({ data }) => setTeamStats(data.players || [])).catch(() => {})
+    api.get('/teams')
+      .then(({ data }) => {
+        const nextTeams = data.teams || []
+        setTeams(nextTeams)
+        if (!selectedTeamId && nextTeams.length) setSelectedTeamId(String(nextTeams[0].id))
+      })
+      .catch(() => {})
   }, [])
 
   // ── Load personal notes ─────────────────────────────────────────────────────────
@@ -462,7 +478,17 @@ export default function TacticsBoard() {
   async function saveBoard() {
     setSaving(true)
     const { markers, arrows, zones } = stateRef.current
-    const payload = { name: boardName, formation, markers, arrows, zones, notes }
+    const teamId = selectedTeamId ? Number(selectedTeamId) : null
+    const payload = {
+      name: boardName,
+      team_id: teamId,
+      formation,
+      markers,
+      arrows,
+      zones,
+      match_context: { team_id: teamId },
+      notes,
+    }
     try {
       let res
       if (activeBoardId) {
@@ -498,6 +524,7 @@ export default function TacticsBoard() {
     setActiveBoardId(b.id)
     setBoardName(b.name)
     setFormation(b.formation || '6-2')
+    setSelectedTeamId(b.team_id ? String(b.team_id) : '')
     setNotes(b.notes || '')
     setNotesSaved(true)
     drawAll()
@@ -505,17 +532,49 @@ export default function TacticsBoard() {
   }
 
   // ── AI suggestions ──────────────────────────────────────────────────────────────
-  function sendAI() {
+  async function sendAI() {
     if (!aiInput.trim()) return
     const prompt = aiInput.trim()
     setChatMsgs(prev => [...prev, { role: 'user', text: prompt }])
     setAiInput('')
     setAiLoading(true)
-    const { text, delay } = getMockAIReply(prompt, teamStats)
-    setTimeout(() => {
+    const { markers, arrows, zones } = stateRef.current
+    const teamId = selectedTeamId ? Number(selectedTeamId) : null
+
+    try {
+      const { data } = await api.post('/ai/suggest', {
+        prompt,
+        boardId: activeBoardId,
+        markers,
+        arrows,
+        zones,
+        formation,
+        matchContext: {
+          team_id: teamId,
+          board_name: boardName,
+        },
+      })
+
+      const source = data.source === 'openai' && data.model
+        ? `VolleyOps AI (${data.model})`
+        : 'VolleyOps AI (fallback)'
+      const context = data.context?.length
+        ? `\n\n**Context used**\n${data.context.map(item => `- ${item}`).join('\n')}`
+        : ''
+      const suggestions = data.suggestions?.length
+        ? `\n\n**Suggestions**\n${data.suggestions.map((item, idx) => `${idx + 1}. ${item}`).join('\n')}`
+        : ''
+      const text = `**${source}**\n\n${data.summary || 'Here is the tactical read.'}${context}${suggestions}`
       setChatMsgs(prev => [...prev, { role: 'ai', text }])
+    } catch (err) {
+      toast(err.response?.data?.error || 'AI request failed', 'error')
+      setChatMsgs(prev => [...prev, {
+        role: 'ai',
+        text: 'I could not reach the AI service for this request. Check the backend console and OpenAI key, then try again.',
+      }])
+    } finally {
       setAiLoading(false)
-    }, delay)
+    }
   }
 
   const TOOLS = [
@@ -539,6 +598,12 @@ export default function TacticsBoard() {
           </div>
           <input value={boardName} onChange={e => setBoardName(e.target.value)}
             style={{ background: 'rgba(255,255,255,.1)', border: '1px solid rgba(255,255,255,.2)', borderRadius: 8, padding: '4px 10px', color: '#fff', fontSize: 13, fontFamily: 'DM Sans, sans-serif', outline: 'none', width: 180 }} />
+          {teams.length > 0 && (
+            <select value={selectedTeamId} onChange={e => setSelectedTeamId(e.target.value)}
+              style={{ background: 'rgba(255,255,255,.1)', border: '1px solid rgba(255,255,255,.2)', borderRadius: 8, padding: '5px 10px', color: '#fff', fontSize: 13, fontFamily: 'DM Sans, sans-serif', outline: 'none', width: 170 }}>
+              {teams.map(team => <option key={team.id} value={team.id} style={{ color: '#0F1729' }}>{team.name}</option>)}
+            </select>
+          )}
         </div>
         <div style={{ display: 'flex', gap: '.75rem', alignItems: 'center' }}>
           <button onClick={clearBoard} style={tbBtn}>🗑 Clear</button>
@@ -643,7 +708,7 @@ export default function TacticsBoard() {
                 {chatMsgs.map((m, i) => (
                   <div key={i} style={{ padding: '.65rem .85rem', borderRadius: 12, fontSize: '.8rem', lineHeight: 1.55, background: m.role === 'user' ? 'rgba(65,88,208,.1)' : '#F8F9FC', color: '#0F1729', alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '92%', border: m.role === 'ai' ? '1.5px solid rgba(65,88,208,.08)' : 'none' }}>
                     {m.role === 'ai' && <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '.68rem', fontWeight: 700, color: '#C850C0', marginBottom: '.3rem' }}>✦ VolleyOps AI</div>}
-                    <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: m.text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }} />
+                    <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: formatChatText(m.text) }} />
                   </div>
                 ))}
                 {aiLoading && (

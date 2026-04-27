@@ -173,6 +173,7 @@ router.get('/stats', authenticate, requireRole('admin', 'coach', 'assistant_coac
       t.division,
       s.matches_played, s.sets_played,
       s.points, s.kills, s.aces, s.blocks, s.digs, s.errors,
+      ROUND(CAST(s.points AS REAL) / NULLIF(s.matches_played, 0), 1) AS points_per_match,
       ROUND(CAST(s.kills AS REAL) / NULLIF(s.matches_played, 0), 1) AS kills_per_match,
       ROUND(CAST(s.aces  AS REAL) / NULLIF(s.matches_played, 0), 1) AS aces_per_match,
       ROUND(CAST(s.blocks AS REAL) / NULLIF(s.matches_played, 0), 1) AS blocks_per_match,

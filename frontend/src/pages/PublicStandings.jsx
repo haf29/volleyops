@@ -1,8 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import axios from 'axios'
-
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001/api'
+import api from '../api/client'
 
 function StatBar({ value, max }) {
   const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0
@@ -38,7 +36,7 @@ export default function PublicStandings() {
     const params = new URLSearchParams()
     if (seasonFilter !== 'all')   params.set('season', seasonFilter)
     if (divisionFilter !== 'all') params.set('division', divisionFilter)
-    axios.get(`${API_BASE}/standings?${params}`)
+    api.get('/standings', { params })
       .then(r => setStandings(r.data.standings || []))
       .catch(() => setStandings([]))
       .finally(() => setLoading(false))
